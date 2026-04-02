@@ -4,13 +4,14 @@ import SwiftUI
 struct ContentView: View {
     @ObservedObject var store: ClipFlowStore
     @Environment(\.colorScheme) private var colorScheme
+    @State private var inspectingItemID: ClipboardItem.ID?
 
     var body: some View {
         let palette = ClipFlowPalette.resolve(for: colorScheme)
 
         GeometryReader { proxy in
-            let isCompact = proxy.size.width < 1460
-            let horizontalPadding: CGFloat = isCompact ? 20 : 24
+            let isCompact = proxy.size.width < 1320
+            let horizontalPadding: CGFloat = proxy.size.width < 1080 ? 16 : (isCompact ? 20 : 24)
 
             ZStack {
                 AppBackground(palette: palette)
@@ -22,10 +23,10 @@ struct ContentView: View {
                         if isCompact {
                             VStack(spacing: 18) {
                                 SidebarView(store: store, palette: palette)
-                                LibraryView(store: store, palette: palette)
-                                    .frame(minHeight: 620)
-                                DetailView(store: store, palette: palette)
-                                    .frame(minHeight: 420)
+                                LibraryView(store: store, palette: palette) { item in
+                                    toggleLibraryInspector(for: item)
+                                }
+                                    .frame(minHeight: 520)
                                 IntegrationRow(integrations: store.integrations, palette: palette)
                             }
                         } else {
@@ -34,14 +35,13 @@ struct ContentView: View {
                                     .frame(width: 252)
 
                                 VStack(spacing: 18) {
-                                    LibraryView(store: store, palette: palette)
-                                        .frame(minWidth: 640, minHeight: 760)
+                                    LibraryView(store: store, palette: palette) { item in
+                                        toggleLibraryInspector(for: item)
+                                    }
+                                        .frame(minWidth: 720, minHeight: 680)
                                     IntegrationRow(integrations: store.integrations, palette: palette)
                                 }
                                 .frame(maxWidth: .infinity)
-
-                                DetailView(store: store, palette: palette)
-                                    .frame(width: 364)
                             }
                         }
                     }
@@ -51,7 +51,47 @@ struct ContentView: View {
                     .padding(.bottom, 24)
                 }
                 .scrollIndicators(.hidden)
+                .blur(radius: inspectingItem == nil ? 0 : 2)
+
+                if let inspectingItem {
+                    Color.black.opacity(0.18)
+                        .ignoresSafeArea()
+                        .onTapGesture {
+                            withAnimation(.spring(response: 0.28, dampingFraction: 0.88)) {
+                                inspectingItemID = nil
+                            }
+                        }
+
+                    LibraryInspectorOverlay(
+                        item: inspectingItem,
+                        store: store,
+                        palette: palette,
+                        maxHeight: min(max(proxy.size.height - 96, 420), 760)
+                    ) {
+                        withAnimation(.spring(response: 0.28, dampingFraction: 0.88)) {
+                            inspectingItemID = nil
+                        }
+                    }
+                    .frame(width: min(620, max(420, proxy.size.width - 120)))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                    .padding(.horizontal, 40)
+                    .padding(.vertical, 48)
+                    .transition(.scale(scale: 0.98).combined(with: .opacity))
+                    .zIndex(10)
+                }
             }
+        }
+    }
+
+    private var inspectingItem: ClipboardItem? {
+        guard let inspectingItemID else { return nil }
+        return store.item(withID: inspectingItemID)
+    }
+
+    private func toggleLibraryInspector(for item: ClipboardItem) {
+        withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) {
+            store.select(item)
+            inspectingItemID = inspectingItemID == item.id ? nil : item.id
         }
     }
 }
@@ -255,11 +295,12 @@ struct SidebarView: View {
 struct LibraryView: View {
     @ObservedObject var store: ClipFlowStore
     let palette: ClipFlowPalette
+    let onInspectItem: (ClipboardItem) -> Void
 
     var body: some View {
         FrostedPanel(palette: palette) {
-            VStack(alignment: .leading, spacing: 18) {
-                HStack(alignment: .top, spacing: 18) {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(alignment: .top, spacing: 16) {
                     VStack(alignment: .leading, spacing: 7) {
                         Text(store.selectedCategory.title)
                             .font(.system(size: 28, weight: .bold, design: .rounded))
@@ -280,7 +321,7 @@ struct LibraryView: View {
                     }
                 }
 
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 12)], spacing: 12) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 10)], spacing: 10) {
                     ForEach(store.metrics) { metric in
                         MetricCard(metric: metric, palette: palette)
                     }
@@ -294,22 +335,22 @@ struct LibraryView: View {
                         .padding(.top, 4)
                 } else {
                     ScrollView {
-                        LazyVStack(spacing: 12) {
+                        LazyVStack(spacing: 10) {
                             ForEach(store.filteredItems) { item in
-                                Button {
+                                LibraryInteractiveCard(
+                                    item: item,
+                                    store: store,
+                                    isSelected: store.selectedItem?.id == item.id,
+                                    displayedSnippet: store.displaySnippet(for: item),
+                                    palette: palette
+                                ) {
                                     withAnimation(.spring(response: 0.35, dampingFraction: 0.84)) {
                                         store.select(item)
                                     }
-                                } label: {
-                                    ClipboardCard(
-                                        item: item,
-                                        isSelected: store.selectedItem?.id == item.id,
-                                        displayedSnippet: store.displaySnippet(for: item),
-                                        palette: palette,
-                                        store: store
-                                    )
+                                } onInspect: {
+                                    onInspectItem(item)
                                 }
-                                .buttonStyle(.plain)
+                                .frame(maxWidth: .infinity)
                             }
                         }
                         .padding(.vertical, 4)
@@ -328,21 +369,21 @@ struct EmptyLibraryView: View {
     let palette: ClipFlowPalette
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack(alignment: .top, spacing: 18) {
-                VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .top, spacing: 16) {
+                VStack(alignment: .leading, spacing: 8) {
                     Text("从复制开始，建立你的剪贴工作流")
-                        .font(.system(size: 30, weight: .bold, design: .rounded))
+                        .font(.system(size: 28, weight: .bold, design: .rounded))
 
                     Text("去任意应用复制文字或图片，ClipFlow 会自动记录和分类。需要回贴时，按下 Option + V，就能在指针附近快速调出内容。")
-                        .font(.system(size: 14, weight: .medium))
+                        .font(.system(size: 13, weight: .medium))
                         .foregroundStyle(Color.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
                 Spacer(minLength: 12)
 
-                VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 8) {
                     EmptyStateBadge(
                         icon: "cursorarrow.click.2",
                         title: "快捷呼出",
@@ -356,7 +397,7 @@ struct EmptyLibraryView: View {
                 }
             }
 
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 12)], spacing: 12) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 10)], spacing: 10) {
                 EmptyStateCard(
                     icon: "sparkles.rectangle.stack",
                     tint: ClipCategory.quickPaste.tint,
@@ -377,7 +418,7 @@ struct EmptyLibraryView: View {
                 )
             }
 
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 8) {
                 Text("使用步骤")
                     .font(.system(size: 14, weight: .semibold))
 
@@ -386,27 +427,27 @@ struct EmptyLibraryView: View {
                 StepRow(index: "3", text: "选择内容后直接粘贴，或回到这里继续整理")
             }
 
-            HStack(spacing: 10) {
+            HStack(spacing: 8) {
                 Button("打开快捷面板") {
                     ClipFlowRuntime.shared.showHUD()
                 }
-                .buttonStyle(ClipButtonStyle(fill: palette.primaryButtonFill, foreground: .white))
+                .buttonStyle(DenseClipButtonStyle(fill: palette.primaryButtonFill, foreground: .white))
 
                 Button(store.capturePaused ? "恢复监听" : "暂停监听") {
                     store.capturePaused.toggle()
                 }
-                .buttonStyle(ClipButtonStyle(fill: palette.secondaryButtonFill))
+                .buttonStyle(DenseClipButtonStyle(fill: palette.secondaryButtonFill))
 
                 Button("退出应用") {
                     NSApp.terminate(nil)
                 }
-                .buttonStyle(ClipButtonStyle(fill: Color.red.opacity(0.14), foreground: Color.red))
+                .buttonStyle(DenseClipButtonStyle(fill: Color.red.opacity(0.14), foreground: Color.red))
             }
 
             Divider()
                 .overlay(Color.white.opacity(0.08))
 
-            HStack(spacing: 12) {
+            HStack(spacing: 10) {
                 InfoStat(title: "当前记录", value: "\(store.items.count)")
                 InfoStat(title: "隐私条目", value: "\(store.protectedCount)")
                 InfoStat(title: "排除应用", value: "\(store.excludedAppCount)")
@@ -417,112 +458,231 @@ struct EmptyLibraryView: View {
     }
 }
 
-struct DetailView: View {
-    @ObservedObject var store: ClipFlowStore
+struct LibraryInteractiveCard: NSViewRepresentable {
+    let item: ClipboardItem
+    let store: ClipFlowStore
+    let isSelected: Bool
+    let displayedSnippet: String
     let palette: ClipFlowPalette
+    let onSelect: () -> Void
+    let onInspect: () -> Void
 
-    var body: some View {
-        FrostedPanel(palette: palette) {
-            if let item = store.selectedItem {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 20) {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text("详情预览")
-                                    .font(.system(size: 13, weight: .semibold))
-                                    .foregroundStyle(Color.secondary)
-                                Text(item.title)
-                                    .font(.system(size: 24, weight: .bold, design: .rounded))
-                            }
+    func makeNSView(context: Context) -> LibraryInteractiveHostingView {
+        let view = LibraryInteractiveHostingView()
+        view.update(
+            rootView: AnyView(
+                ClipboardCard(
+                    item: item,
+                    isSelected: isSelected,
+                    displayedSnippet: displayedSnippet,
+                    palette: palette,
+                    store: store
+                )
+            ),
+            onSelect: onSelect,
+            onInspect: onInspect
+        )
+        return view
+    }
 
-                            Spacer()
+    func updateNSView(_ nsView: LibraryInteractiveHostingView, context: Context) {
+        nsView.update(
+            rootView: AnyView(
+                ClipboardCard(
+                    item: item,
+                    isSelected: isSelected,
+                    displayedSnippet: displayedSnippet,
+                    palette: palette,
+                    store: store
+                )
+            ),
+            onSelect: onSelect,
+            onInspect: onInspect
+        )
+    }
+}
 
-                            KindBadge(kind: item.kind, tint: kindTint(item.kind))
-                        }
+final class LibraryInteractiveHostingView: NSView {
+    private let hostingView = NSHostingView(rootView: AnyView(EmptyView()))
+    private var onSelect: () -> Void = {}
+    private var onInspect: () -> Void = {}
 
-                        PreviewPanel(
-                            item: item,
-                            displayedText: store.displayFullText(for: item),
-                            palette: palette,
-                            store: store
-                        )
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
 
-                        ViewThatFits(in: .horizontal) {
-                            HStack(spacing: 10) {
-                                actionButtons(for: item)
-                            }
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.clear.cgColor
 
-                            VStack(alignment: .leading, spacing: 10) {
-                                actionButtons(for: item)
-                            }
-                        }
+        hostingView.translatesAutoresizingMaskIntoConstraints = false
+        hostingView.wantsLayer = true
+        hostingView.layer?.backgroundColor = NSColor.clear.cgColor
+        addSubview(hostingView)
 
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("建议粘贴位置")
-                                .font(.system(size: 14, weight: .semibold))
+        NSLayoutConstraint.activate([
+            hostingView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            hostingView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            hostingView.topAnchor.constraint(equalTo: topAnchor),
+            hostingView.bottomAnchor.constraint(equalTo: bottomAnchor)
+        ])
+    }
 
-                            FlexiblePillRow(items: item.pasteTargets, tint: ClipCategory.links.tint)
-                        }
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
 
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("隐私状态")
-                                .font(.system(size: 14, weight: .semibold))
+    func update(
+        rootView: AnyView,
+        onSelect: @escaping () -> Void,
+        onInspect: @escaping () -> Void
+    ) {
+        hostingView.rootView = rootView
+        self.onSelect = onSelect
+        self.onInspect = onInspect
+    }
 
-                            PrivacyFactRow(
-                                title: "隐私级别",
-                                value: item.privacy.label,
-                                tint: item.privacy.color
-                            )
-                            PrivacyFactRow(
-                                title: "存储方式",
-                                value: item.localOnly ? "仅本地保存" : "普通本地历史",
-                                tint: item.localOnly ? ClipCategory.protected.tint : ClipCategory.smartStacks.tint
-                            )
-                            PrivacyFactRow(
-                                title: "保留策略",
-                                value: item.autoExpire ? "已开启自动过期" : "手动清理",
-                                tint: item.autoExpire ? ClipCategory.quickPaste.tint : ClipCategory.all.tint
-                            )
-                        }
+    override func mouseDown(with event: NSEvent) {
+        onSelect()
+    }
 
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("分组原因")
-                                .font(.system(size: 14, weight: .semibold))
+    override func rightMouseDown(with event: NSEvent) {
+        onInspect()
+    }
 
-                            Text(groupingReason(for: item))
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundStyle(Color.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-
-                        Button(role: .destructive) {
-                            store.delete(item.id)
-                        } label: {
-                            Text("删除这条内容")
-                                .font(.system(size: 13, weight: .semibold))
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 12)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(Color.red.opacity(0.82))
-                    }
-                }
-            } else {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("尚未选择内容")
-                        .font(.system(size: 20, weight: .bold))
-                    Text("选择一条剪贴内容后，可以在这里查看详情、置顶、显示敏感信息，或者直接回贴到刚才使用的应用里。")
-                        .foregroundStyle(Color.secondary)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            }
+    override func otherMouseDown(with event: NSEvent) {
+        if event.buttonNumber == 2 {
+            onInspect()
+        } else {
+            super.otherMouseDown(with: event)
         }
     }
 
+    override func menu(for event: NSEvent) -> NSMenu? {
+        onInspect()
+        return nil
+    }
+}
+
+struct LibraryInspectorOverlay: View {
+    let item: ClipboardItem
+    @ObservedObject var store: ClipFlowStore
+    let palette: ClipFlowPalette
+    let maxHeight: CGFloat
+    let onClose: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("条目信息")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Color.secondary)
+                    Text(item.title)
+                        .font(.system(size: 24, weight: .bold, design: .rounded))
+                    Text("\(item.sourceApp) · \(item.timeLabel)")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Color.secondary)
+                }
+
+                Spacer()
+
+                KindBadge(kind: item.kind, tint: tint)
+
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(Color.secondary)
+                        .frame(width: 28, height: 28)
+                        .background(
+                            Circle()
+                                .fill(Color.white.opacity(0.08))
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    PreviewPanel(
+                        item: item,
+                        displayedText: store.displayFullText(for: item),
+                        palette: palette,
+                        store: store
+                    )
+
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 10) {
+                            actionButtons
+                        }
+
+                        VStack(alignment: .leading, spacing: 10) {
+                            actionButtons
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("信息摘要")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Color.secondary)
+
+                        PrivacyFactRow(title: "隐私级别", value: item.privacy.label, tint: item.privacy.color)
+                        PrivacyFactRow(
+                            title: "存储方式",
+                            value: item.localOnly ? "仅本地保存" : "普通本地历史",
+                            tint: item.localOnly ? ClipCategory.protected.tint : ClipCategory.smartStacks.tint
+                        )
+                        PrivacyFactRow(
+                            title: "保留策略",
+                            value: item.autoExpire ? "已开启自动过期" : "手动清理",
+                            tint: item.autoExpire ? ClipCategory.quickPaste.tint : ClipCategory.all.tint
+                        )
+                    }
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("建议粘贴位置")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Color.secondary)
+
+                        FlexiblePillRow(items: item.pasteTargets, tint: ClipCategory.links.tint)
+                    }
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("归类说明")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Color.secondary)
+
+                        Text(groupingReason)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(Color.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(14)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(
+                                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                    .fill(Color.white.opacity(0.05))
+                            )
+                    }
+                }
+            }
+        }
+        .padding(20)
+        .frame(maxHeight: maxHeight, alignment: .top)
+        .background(
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .fill(.ultraThinMaterial)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .stroke(Color.white.opacity(0.18), lineWidth: 1)
+        )
+        .shadow(color: Color.black.opacity(0.22), radius: 28, x: 0, y: 18)
+    }
+
     @ViewBuilder
-    private func actionButtons(for item: ClipboardItem) -> some View {
+    private var actionButtons: some View {
         Button {
             ClipFlowRuntime.shared.paste(item)
+            onClose()
         } label: {
             DetailActionLabel(title: "立即粘贴", icon: "arrow.up.doc.fill", tint: ClipCategory.quickPaste.tint)
         }
@@ -547,10 +707,18 @@ struct DetailView: View {
             }
             .buttonStyle(.plain)
         }
+
+        Button(role: .destructive) {
+            store.delete(item.id)
+            onClose()
+        } label: {
+            DetailActionLabel(title: "删除", icon: "trash.fill", tint: Color.red)
+        }
+        .buttonStyle(.plain)
     }
 
-    private func kindTint(_ kind: ClipboardKind) -> Color {
-        switch kind {
+    private var tint: Color {
+        switch item.kind {
         case .text: ClipCategory.all.tint
         case .code: ClipCategory.code.tint
         case .link: ClipCategory.links.tint
@@ -559,20 +727,20 @@ struct DetailView: View {
         }
     }
 
-    private func groupingReason(for item: ClipboardItem) -> String {
+    private var groupingReason: String {
         if item.kind == .image {
-            return "这条内容被识别为图片，因为系统在剪贴板中检测到了位图数据或图片文件，并保留了尺寸信息方便再次粘贴。"
+            return "已识别为图片内容，会保留缩略预览和尺寸信息，方便再次回贴。"
         }
         if item.kind == .code {
-            return "这条内容被归类为代码，因为其中包含语法关键字、命令行标记，或者常见的开发场景特征。"
+            return "已识别为代码或命令内容，因为文本里出现了明显的开发语法和终端特征。"
         }
         if item.kind == .secret || item.privacy != .standard {
-            return "这条内容进入了隐私保护分组，因为它看起来像验证码、令牌、密码片段，或者来自高风险来源应用。"
+            return "已进入保护分组，因为这条内容看起来像验证码、密钥或高风险敏感信息。"
         }
         if item.kind == .link {
-            return "这条内容被识别为链接，因为系统检测到了可解析的网址，通常会用于沟通、共享或参考。"
+            return "已识别为链接内容，因为系统检测到了可直接打开的网址。"
         }
-        return "这条内容被保留在通用分组里，因为它更像普通文本，不属于命令、链接或敏感信息。"
+        return "已保留在通用文本分组，因为它更像常规复制内容，不属于链接、代码或敏感项。"
     }
 }
 
@@ -629,116 +797,147 @@ struct IntegrationRow: View {
 
 struct MenuBarView: View {
     @ObservedObject var store: ClipFlowStore
-    @Environment(\.openWindow) private var openWindow
+    @State private var inspectingItemID: UUID?
 
     var body: some View {
-        let recentItems = Array(store.recentItems.prefix(3))
+        let recentItems = Array(store.recentItems.prefix(50))
+        ZStack {
+            VStack(alignment: .leading, spacing: 12) {
+                MenuPanelHeader(store: store)
 
-        VStack(alignment: .leading, spacing: 12) {
-            MenuPanelHeader(store: store)
-
-            if recentItems.isEmpty {
-                Text("先去其他应用复制文字或图片，这里会立刻出现最近条目。")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(Color.secondary)
-                    .padding(.horizontal, 4)
-            } else {
-                VStack(spacing: 8) {
-                    HStack {
-                        Text("最近内容")
-                            .font(.system(size: 12, weight: .bold))
-                        Spacer()
-                        Text("点击即可粘贴")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(Color.secondary)
-                    }
-
-                    ForEach(recentItems) { item in
-                        Button {
-                            ClipFlowRuntime.shared.paste(item)
-                        } label: {
-                            MenuRecentClipRow(
-                                item: item,
-                                snippet: store.displaySnippet(for: item)
-                            )
+                if recentItems.isEmpty {
+                    Text("先去其他应用复制文字或图片，这里会立刻出现最近条目。")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Color.secondary)
+                        .padding(.horizontal, 4)
+                } else {
+                    VStack(spacing: 8) {
+                        HStack {
+                            Text("最近内容")
+                                .font(.system(size: 12, weight: .bold))
+                            Spacer()
+                            Text("左键粘贴，右键查看详情")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundStyle(Color.secondary)
                         }
-                        .buttonStyle(MenuRowButtonStyle())
+
+                        ScrollView {
+                            LazyVStack(spacing: 8) {
+                                ForEach(recentItems) { item in
+                                    MenuInteractiveRecentRow(
+                                        item: item,
+                                        snippet: store.displaySnippet(for: item),
+                                        store: store,
+                                        onActivate: {
+                                            ClipFlowRuntime.shared.paste(item)
+                                        },
+                                        onInspect: {
+                                            toggleMenuInspector(for: item)
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                        .frame(maxHeight: 300)
                     }
                 }
+
+                HStack(spacing: 8) {
+                    Button {
+                        AppNavigationCenter.shared.openLibrary()
+                    } label: {
+                        MenuCompactActionLabel(
+                            title: "主窗口",
+                            icon: "rectangle.on.rectangle",
+                            tint: ClipCategory.all.tint
+                        )
+                    }
+                    .buttonStyle(MenuCompactButtonStyle(fill: Color.primary.opacity(0.055)))
+
+                    Button {
+                        ClipFlowRuntime.shared.showHUD()
+                    } label: {
+                        MenuCompactActionLabel(
+                            title: "快贴",
+                            icon: "cursorarrow.click.2",
+                            tint: ClipCategory.quickPaste.tint
+                        )
+                    }
+                    .buttonStyle(MenuCompactButtonStyle(fill: ClipCategory.quickPaste.tint.opacity(0.14)))
+
+                    Button {
+                        store.capturePaused.toggle()
+                    } label: {
+                        MenuCompactActionLabel(
+                            title: store.capturePaused ? "恢复" : "暂停",
+                            icon: store.capturePaused ? "play.fill" : "pause.fill",
+                            tint: store.capturePaused ? ClipCategory.protected.tint : ClipCategory.all.tint
+                        )
+                    }
+                    .buttonStyle(
+                        MenuCompactButtonStyle(
+                            fill: store.capturePaused ? ClipCategory.protected.tint.opacity(0.14) : Color.primary.opacity(0.055),
+                            foreground: store.capturePaused ? ClipCategory.protected.tint : Color.primary
+                        )
+                    )
+
+                    Button {
+                        AppNavigationCenter.shared.openSettings()
+                    } label: {
+                        MenuCompactActionLabel(
+                            title: "设置",
+                            icon: "gearshape",
+                            tint: ClipCategory.links.tint
+                        )
+                    }
+                    .buttonStyle(MenuCompactButtonStyle(fill: Color.primary.opacity(0.055)))
+                }
+
+                Divider()
+                    .overlay(Color.white.opacity(0.08))
+
+                HStack(spacing: 8) {
+                    Button("清空") {
+                        store.clearHistory()
+                    }
+                    .buttonStyle(MenuFooterActionStyle(fill: Color.red.opacity(0.10), foreground: Color.red))
+
+                    Button("重启") {
+                        ClipFlowRuntime.shared.restartApplication()
+                    }
+                    .buttonStyle(MenuFooterActionStyle(fill: ClipCategory.quickPaste.tint.opacity(0.12), foreground: ClipCategory.quickPaste.tint))
+
+                    Button("退出") {
+                        NSApp.terminate(nil)
+                    }
+                    .buttonStyle(MenuFooterActionStyle(fill: Color.red.opacity(0.15), foreground: Color.red))
+                }
             }
+            .blur(radius: inspectingItem == nil ? 0 : 2)
 
-            HStack(spacing: 8) {
-                Button {
-                    openWindow(id: "library")
-                    ClipFlowRuntime.shared.openLibrary()
-                } label: {
-                    MenuCompactActionLabel(
-                        title: "主窗口",
-                        icon: "rectangle.on.rectangle",
-                        tint: ClipCategory.all.tint
-                    )
-                }
-                .buttonStyle(MenuCompactButtonStyle(fill: Color.primary.opacity(0.055)))
-
-                Button {
-                    ClipFlowRuntime.shared.showHUD()
-                } label: {
-                    MenuCompactActionLabel(
-                        title: "快贴",
-                        icon: "cursorarrow.click.2",
-                        tint: ClipCategory.quickPaste.tint
-                    )
-                }
-                .buttonStyle(MenuCompactButtonStyle(fill: ClipCategory.quickPaste.tint.opacity(0.14)))
-
-                Button {
-                    store.capturePaused.toggle()
-                } label: {
-                    MenuCompactActionLabel(
-                        title: store.capturePaused ? "恢复" : "暂停",
-                        icon: store.capturePaused ? "play.fill" : "pause.fill",
-                        tint: store.capturePaused ? ClipCategory.protected.tint : ClipCategory.all.tint
-                    )
-                }
-                .buttonStyle(
-                    MenuCompactButtonStyle(
-                        fill: store.capturePaused ? ClipCategory.protected.tint.opacity(0.14) : Color.primary.opacity(0.055),
-                        foreground: store.capturePaused ? ClipCategory.protected.tint : Color.primary
-                    )
+            if let inspectingItem {
+                HUDInspectorOverlay(
+                    item: inspectingItem,
+                    store: store,
+                    onClose: { inspectingItemID = nil },
+                    onPaste: {
+                        inspectingItemID = nil
+                        ClipFlowRuntime.shared.paste(inspectingItem)
+                    }
                 )
-
-                SettingsLink {
-                    MenuCompactActionLabel(
-                        title: "设置",
-                        icon: "gearshape",
-                        tint: ClipCategory.links.tint
-                    )
-                }
-                .buttonStyle(MenuCompactButtonStyle(fill: Color.primary.opacity(0.055)))
-            }
-
-            Divider()
-                .overlay(Color.white.opacity(0.08))
-
-            HStack(spacing: 8) {
-                Button("清空") {
-                    store.clearHistory()
-                }
-                .buttonStyle(MenuFooterActionStyle(fill: Color.red.opacity(0.10), foreground: Color.red))
-
-                Button("重启") {
-                    ClipFlowRuntime.shared.restartApplication()
-                }
-                .buttonStyle(MenuFooterActionStyle(fill: ClipCategory.quickPaste.tint.opacity(0.12), foreground: ClipCategory.quickPaste.tint))
-
-                Button("退出") {
-                    NSApp.terminate(nil)
-                }
-                .buttonStyle(MenuFooterActionStyle(fill: Color.red.opacity(0.15), foreground: Color.red))
             }
         }
         .padding(14)
         .frame(width: 320)
+    }
+
+    private var inspectingItem: ClipboardItem? {
+        guard let inspectingItemID else { return nil }
+        return store.item(withID: inspectingItemID)
+    }
+
+    private func toggleMenuInspector(for item: ClipboardItem) {
+        inspectingItemID = inspectingItemID == item.id ? nil : item.id
     }
 }
 
@@ -875,6 +1074,7 @@ struct MenuEmptyStateCard: View {
 struct MenuRecentClipRow: View {
     let item: ClipboardItem
     let snippet: String
+    @ObservedObject var store: ClipFlowStore
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -901,10 +1101,22 @@ struct MenuRecentClipRow: View {
                         .foregroundStyle(Color.secondary)
                 }
 
-                Text(snippet)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Color.secondary)
-                    .lineLimit(2)
+                if item.isImage {
+                    ClipThumbnailView(
+                        store: store,
+                        item: item,
+                        height: 82,
+                        cornerRadius: 12,
+                        showsDimensionLabel: false,
+                        contentMode: .fit,
+                        insetPreview: true
+                    )
+                } else {
+                    Text(snippet)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Color.secondary)
+                        .lineLimit(2)
+                }
 
                 Text(item.sourceApp)
                     .font(.system(size: 10, weight: .bold))
@@ -934,8 +1146,117 @@ struct MenuRecentClipRow: View {
         case .code: "terminal"
         case .link: "link"
         case .secret: "lock.fill"
-        case .image: "photo"
+        case .image: "photo.stack.fill"
         }
+    }
+}
+
+struct MenuInteractiveRecentRow: NSViewRepresentable {
+    let item: ClipboardItem
+    let snippet: String
+    let store: ClipFlowStore
+    let onActivate: () -> Void
+    let onInspect: () -> Void
+
+    func makeNSView(context: Context) -> MenuInteractiveRecentHostingView {
+        let view = MenuInteractiveRecentHostingView()
+        view.update(
+            rootView: AnyView(
+                MenuRecentClipRow(item: item, snippet: snippet, store: store)
+                    .padding(10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(Color.primary.opacity(0.045))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                    )
+            ),
+            onActivate: onActivate,
+            onInspect: onInspect
+        )
+        return view
+    }
+
+    func updateNSView(_ nsView: MenuInteractiveRecentHostingView, context: Context) {
+        nsView.update(
+            rootView: AnyView(
+                MenuRecentClipRow(item: item, snippet: snippet, store: store)
+                    .padding(10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(Color.primary.opacity(0.045))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                    )
+            ),
+            onActivate: onActivate,
+            onInspect: onInspect
+        )
+    }
+}
+
+final class MenuInteractiveRecentHostingView: NSView {
+    private let hostingView = NSHostingView(rootView: AnyView(EmptyView()))
+    private var onActivate: () -> Void = {}
+    private var onInspect: () -> Void = {}
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.clear.cgColor
+
+        hostingView.translatesAutoresizingMaskIntoConstraints = false
+        hostingView.wantsLayer = true
+        hostingView.layer?.backgroundColor = NSColor.clear.cgColor
+        addSubview(hostingView)
+
+        NSLayoutConstraint.activate([
+            hostingView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            hostingView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            hostingView.topAnchor.constraint(equalTo: topAnchor),
+            hostingView.bottomAnchor.constraint(equalTo: bottomAnchor)
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    func update(
+        rootView: AnyView,
+        onActivate: @escaping () -> Void,
+        onInspect: @escaping () -> Void
+    ) {
+        hostingView.rootView = rootView
+        self.onActivate = onActivate
+        self.onInspect = onInspect
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        onActivate()
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        onInspect()
+    }
+
+    override func otherMouseDown(with event: NSEvent) {
+        if event.buttonNumber == 2 {
+            onInspect()
+        } else {
+            super.otherMouseDown(with: event)
+        }
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        onInspect()
+        return nil
     }
 }
 
@@ -945,22 +1266,22 @@ struct MenuCompactActionLabel: View {
     let tint: Color
 
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 5) {
             ZStack {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
                     .fill(tint.opacity(0.14))
-                    .frame(width: 30, height: 30)
+                    .frame(width: 28, height: 28)
 
                 Image(systemName: icon)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 12, weight: .semibold))
                     .foregroundStyle(tint)
             }
 
             Text(title)
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: 10, weight: .semibold))
                 .lineLimit(1)
         }
-        .frame(maxWidth: .infinity, minHeight: 58)
+        .frame(maxWidth: .infinity, minHeight: 46)
     }
 }
 
@@ -972,14 +1293,14 @@ struct MenuCompactButtonStyle: ButtonStyle {
         configuration.label
             .foregroundStyle(foreground)
             .padding(.horizontal, 8)
-            .padding(.vertical, 10)
+            .padding(.vertical, 8)
             .frame(maxWidth: .infinity)
             .background(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .fill(fill.opacity(configuration.isPressed ? 0.78 : 1))
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
                     .stroke(Color.white.opacity(0.08), lineWidth: 1)
             )
     }
@@ -1082,22 +1403,14 @@ struct SettingsView: View {
                                 }
                             }
 
-                            HStack(spacing: 10) {
-                                SettingsStatusPill(
-                                    title: "监听",
-                                    value: store.capturePaused ? "已暂停" : "运行中",
-                                    tint: store.capturePaused ? ClipCategory.protected.tint : Color.green
-                                )
-                                SettingsStatusPill(
-                                    title: "自动保护",
-                                    value: store.autoProtectSecrets ? "开启" : "关闭",
-                                    tint: store.autoProtectSecrets ? ClipCategory.quickPaste.tint : ClipCategory.all.tint
-                                )
-                                SettingsStatusPill(
-                                    title: "开机启动",
-                                    value: store.launchAtLogin ? "已启用" : "未启用",
-                                    tint: store.launchAtLogin ? ClipCategory.links.tint : ClipCategory.all.tint
-                                )
+                            ViewThatFits(in: .horizontal) {
+                                HStack(spacing: 10) {
+                                    settingsStatusPills
+                                }
+
+                                LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
+                                    settingsStatusPills
+                                }
                             }
                         }
                     }
@@ -1133,6 +1446,28 @@ struct SettingsView: View {
                                 isOn: Binding(
                                     get: { store.launchAtLogin },
                                     set: { store.setLaunchAtLogin($0) }
+                                )
+                            )
+
+                            SettingsToggleCard(
+                                icon: "menubar.rectangle",
+                                tint: ClipCategory.all.tint,
+                                title: "启动时直接驻留状态栏",
+                                detail: "下次启动时不主动展示主窗口，只在状态栏中保持运行，需要时再从状态栏打开。",
+                                isOn: Binding(
+                                    get: { store.launchToStatusBar },
+                                    set: { store.setLaunchToStatusBar($0) }
+                                )
+                            )
+
+                            SettingsToggleCard(
+                                icon: "icloud.fill",
+                                tint: store.iCloudSyncTint,
+                                title: "iCloud 同步历史",
+                                detail: store.iCloudSyncDetail,
+                                isOn: Binding(
+                                    get: { store.iCloudSyncEnabled },
+                                    set: { store.setICloudSyncEnabled($0) }
                                 )
                             )
                         }
@@ -1180,6 +1515,33 @@ struct SettingsView: View {
         .frame(width: 720, height: 640)
         .onAppear {
             excludedAppsText = store.excludedBundleIDs.joined(separator: "\n")
+        }
+    }
+}
+
+private extension SettingsView {
+    var settingsStatusPills: some View {
+        Group {
+            SettingsStatusPill(
+                title: "监听",
+                value: store.capturePaused ? "已暂停" : "运行中",
+                tint: store.capturePaused ? ClipCategory.protected.tint : Color.green
+            )
+            SettingsStatusPill(
+                title: "自动保护",
+                value: store.autoProtectSecrets ? "开启" : "关闭",
+                tint: store.autoProtectSecrets ? ClipCategory.quickPaste.tint : ClipCategory.all.tint
+            )
+            SettingsStatusPill(
+                title: "开机启动",
+                value: store.launchAtLogin ? "已启用" : "未启用",
+                tint: store.launchAtLogin ? ClipCategory.links.tint : ClipCategory.all.tint
+            )
+            SettingsStatusPill(
+                title: "iCloud",
+                value: store.iCloudSyncStatusValue,
+                tint: store.iCloudSyncTint
+            )
         }
     }
 }
@@ -1509,45 +1871,45 @@ struct MetricCard: View {
     let palette: ClipFlowPalette
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top) {
                 ZStack {
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .fill(metric.tint.opacity(0.14))
-                        .frame(width: 42, height: 42)
+                        .frame(width: 38, height: 38)
 
                     Image(systemName: metric.icon)
-                        .font(.system(size: 16, weight: .semibold))
+                        .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(metric.tint)
                 }
 
-                Spacer(minLength: 12)
+                Spacer(minLength: 10)
 
                 Text(metric.value)
-                    .font(.system(size: 28, weight: .bold, design: .rounded))
+                    .font(.system(size: 24, weight: .bold, design: .rounded))
                     .foregroundStyle(metric.tint)
             }
 
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(metric.title)
-                    .font(.system(size: 15, weight: .semibold))
+                    .font(.system(size: 14, weight: .semibold))
                     .lineLimit(1)
 
                 Text(metric.detail)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(Color.secondary)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .frame(maxWidth: .infinity, minHeight: 132, alignment: .leading)
-        .padding(16)
+        .frame(maxWidth: .infinity, minHeight: 112, alignment: .leading)
+        .padding(14)
         .background(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .fill(palette.softFill)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .stroke(palette.border.opacity(0.55), lineWidth: 1)
         )
     }
@@ -1560,29 +1922,29 @@ struct EmptyStateCard: View {
     let detail: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
             ZStack {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(tint.opacity(0.14))
-                    .frame(width: 40, height: 40)
+                    .frame(width: 36, height: 36)
 
                 Image(systemName: icon)
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(tint)
             }
 
             Text(title)
-                .font(.system(size: 15, weight: .semibold))
+                .font(.system(size: 14, weight: .semibold))
 
             Text(detail)
-                .font(.system(size: 12, weight: .medium))
+                .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(Color.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
+        .padding(14)
         .background(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .fill(Color.white.opacity(0.05))
         )
     }
@@ -1594,14 +1956,14 @@ struct EmptyStateBadge: View {
     let detail: String
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             Image(systemName: icon)
-                .font(.system(size: 13, weight: .semibold))
+                .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(ClipCategory.quickPaste.tint)
-                .frame(width: 18, height: 18)
-                .padding(8)
+                .frame(width: 16, height: 16)
+                .padding(7)
                 .background(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .fill(ClipCategory.quickPaste.tint.opacity(0.14))
                 )
 
@@ -1609,14 +1971,14 @@ struct EmptyStateBadge: View {
                 Text(title)
                     .font(.system(size: 12, weight: .semibold))
                 Text(detail)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(Color.secondary)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
         .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(Color.white.opacity(0.05))
         )
     }
@@ -1627,18 +1989,18 @@ struct StepRow: View {
     let text: String
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             Text(index)
                 .font(.system(size: 11, weight: .bold))
                 .foregroundStyle(.white)
-                .frame(width: 24, height: 24)
+                .frame(width: 22, height: 22)
                 .background(
                     Circle()
                         .fill(ClipCategory.quickPaste.tint)
                 )
 
             Text(text)
-                .font(.system(size: 13, weight: .medium))
+                .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(Color.secondary)
         }
     }
@@ -1654,12 +2016,12 @@ struct InfoStat: View {
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(Color.secondary)
             Text(value)
-                .font(.system(size: 20, weight: .bold, design: .rounded))
+                .font(.system(size: 18, weight: .bold, design: .rounded))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
+        .padding(10)
         .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(Color.white.opacity(0.04))
         )
     }
@@ -1671,6 +2033,8 @@ struct ClipThumbnailView: View {
     let height: CGFloat
     var cornerRadius: CGFloat = 20
     var showsDimensionLabel: Bool = true
+    var contentMode: ContentMode = .fill
+    var insetPreview: Bool = false
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
@@ -1713,8 +2077,9 @@ struct ClipThumbnailView: View {
                   let image = NSImage(contentsOf: imageURL) {
             Image(nsImage: image)
                 .resizable()
-                .scaledToFill()
+                .aspectRatio(contentMode: contentMode)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(insetPreview ? 8 : 0)
         } else {
             previewPlaceholder(
                 title: "图片不可用",
@@ -1752,12 +2117,12 @@ struct ClipboardCard: View {
     @ObservedObject var store: ClipFlowStore
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 7) {
                         Text(item.sourceApp)
-                            .font(.system(size: 12, weight: .semibold))
+                            .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(Color.secondary)
 
                         KindBadge(kind: item.kind, tint: tint(for: item.kind))
@@ -1768,15 +2133,15 @@ struct ClipboardCard: View {
                     }
 
                     Text(item.title)
-                        .font(.system(size: 18, weight: .bold, design: .rounded))
+                        .font(.system(size: 16, weight: .bold, design: .rounded))
                         .multilineTextAlignment(.leading)
                 }
 
                 Spacer()
 
-                VStack(alignment: .trailing, spacing: 8) {
+                VStack(alignment: .trailing, spacing: 6) {
                     Text(item.timeLabel)
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(Color.secondary)
 
                     SmallBadge(title: item.privacy.label, tint: item.privacy.color)
@@ -1784,22 +2149,30 @@ struct ClipboardCard: View {
             }
 
             if item.isImage {
-                ClipThumbnailView(store: store, item: item, height: 164)
+                ClipThumbnailView(
+                    store: store,
+                    item: item,
+                    height: 156,
+                    cornerRadius: 18,
+                    showsDimensionLabel: false,
+                    contentMode: .fit,
+                    insetPreview: true
+                )
+            } else {
+                Text(displayedSnippet)
+                    .font(.system(size: item.kind == .code ? 11 : 13, weight: .medium, design: item.kind == .code ? .monospaced : .rounded))
+                    .foregroundStyle(Color.secondary)
+                    .lineLimit(3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            Text(displayedSnippet)
-                .font(.system(size: item.kind == .code ? 12 : 14, weight: .medium, design: item.kind == .code ? .monospaced : .rounded))
-                .foregroundStyle(Color.secondary)
-                .lineLimit(item.isImage ? 2 : 3)
-                .frame(maxWidth: .infinity, alignment: .leading)
-
-            HStack(spacing: 8) {
+            HStack(spacing: 7) {
                 ForEach(item.labels.prefix(4), id: \.self) { label in
                     Text(label)
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(Color.secondary)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 5)
                         .background(
                             Capsule(style: .continuous)
                                 .fill(palette.softFill)
@@ -1809,17 +2182,17 @@ struct ClipboardCard: View {
                 Spacer()
 
                 Label("粘贴", systemImage: "arrowshape.turn.up.right.fill")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(tint(for: item.kind))
             }
         }
-        .padding(16)
+        .padding(14)
         .background(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .fill(isSelected ? tint(for: item.kind).opacity(0.12) : palette.softFill)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
                 .stroke(isSelected ? tint(for: item.kind).opacity(0.4) : palette.border.opacity(0.65), lineWidth: 1)
         )
     }
@@ -1855,7 +2228,14 @@ struct PreviewPanel: View {
 
             if item.isImage {
                 VStack(alignment: .leading, spacing: 12) {
-                    ClipThumbnailView(store: store, item: item, height: 260, cornerRadius: 22)
+                    ClipThumbnailView(
+                        store: store,
+                        item: item,
+                        height: 260,
+                        cornerRadius: 22,
+                        contentMode: .fit,
+                        insetPreview: true
+                    )
 
                     Text(displayedText)
                         .font(.system(size: 13, weight: .medium))
@@ -1868,15 +2248,28 @@ struct PreviewPanel: View {
                         .fill(palette.softFill)
                 )
             } else {
-                Text(displayedText)
-                    .font(.system(size: item.kind == .code ? 12 : 14, weight: .medium, design: item.kind == .code ? .monospaced : .rounded))
-                    .foregroundStyle(Color.primary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(14)
-                    .background(
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .fill(palette.softFill)
-                    )
+                VStack(alignment: .leading, spacing: 12) {
+                    Text(displayedText)
+                        .font(.system(size: item.kind == .code ? 12 : 14, weight: .medium, design: item.kind == .code ? .monospaced : .rounded))
+                        .foregroundStyle(Color.primary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(14)
+                        .background(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .fill(palette.softFill)
+                        )
+
+                    if let linkURL = item.primaryURL {
+                        Button {
+                            NSWorkspace.shared.open(linkURL)
+                        } label: {
+                            Label("访问链接", systemImage: "arrow.up.forward.app")
+                                .font(.system(size: 13, weight: .semibold))
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(ClipButtonStyle(fill: ClipCategory.links.tint.opacity(0.14), foreground: ClipCategory.links.tint))
+                    }
+                }
             }
         }
     }
@@ -2005,6 +2398,23 @@ struct ClipButtonStyle: ButtonStyle {
             .padding(.vertical, 10)
             .background(
                 RoundedRectangle(cornerRadius: 15, style: .continuous)
+                    .fill(fill.opacity(configuration.isPressed ? 0.75 : 1))
+            )
+    }
+}
+
+struct DenseClipButtonStyle: ButtonStyle {
+    let fill: Color
+    var foreground: Color = Color.primary
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(foreground)
+            .padding(.horizontal, 13)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 13, style: .continuous)
                     .fill(fill.opacity(configuration.isPressed ? 0.75 : 1))
             )
     }

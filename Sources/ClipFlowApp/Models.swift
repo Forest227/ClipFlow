@@ -140,6 +140,24 @@ struct ClipboardItem: Identifiable, Hashable, Codable {
         let height = max(Int(imageHeight.rounded()), 1)
         return "\(width) × \(height)"
     }
+
+    var primaryURL: URL? {
+        guard kind == .link else { return nil }
+
+        let sourceText = (fullText.isEmpty ? snippet : fullText)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !sourceText.isEmpty else { return nil }
+
+        let range = NSRange(sourceText.startIndex..<sourceText.endIndex, in: sourceText)
+        if let match = Self.linkDetector?.firstMatch(in: sourceText, options: [], range: range),
+           let url = match.url {
+            return url
+        }
+
+        return URL(string: sourceText)
+    }
+
+    private static let linkDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
 }
 
 struct FlowMetric: Identifiable {
@@ -260,7 +278,7 @@ enum ClipboardClassifier {
         let privacy = privacy(for: normalized, kind: kind, sourceBundleID: sourceBundleID, autoProtectSecrets: autoProtectSecrets)
         let localOnly = privacy != .standard
         let autoExpire = kind == .secret || privacy == .masked
-        let title = makeTitle(for: normalized, kind: kind)
+        let title = kind.label
         let snippet = makeSnippet(for: normalized)
         let labels = labels(for: normalized, kind: kind, sourceApp: sourceApp, privacy: privacy)
         let pasteTargets = pasteTargets(for: kind)
@@ -469,16 +487,25 @@ final class ClipFlowStore: ObservableObject {
         didSet { defaults.set(autoProtectSecrets, forKey: Keys.autoProtectSecrets) }
     }
     @Published var launchAtLogin: Bool
+    @Published var launchToStatusBar: Bool {
+        didSet { defaults.set(launchToStatusBar, forKey: Keys.launchToStatusBar) }
+    }
+    @Published var iCloudSyncEnabled: Bool
     @Published var excludedBundleIDs: [String] {
         didSet { defaults.set(excludedBundleIDs, forKey: Keys.excludedBundleIDs) }
     }
     @Published var revealedItemIDs: Set<UUID> = []
     @Published var lastCaptureStatus: String = "准备就绪"
+    @Published private(set) var iCloudSyncPhase: ClipFlowCloudSyncPhase = .disabled
+    @Published private(set) var iCloudLastSyncedAt: Date?
 
     @Published private(set) var items: [ClipboardItem] = [] {
         didSet {
             persistItems()
             ensureSelectionStillValid()
+            if iCloudSyncEnabled && !isApplyingCloudSnapshot {
+                scheduleICloudSync()
+            }
         }
     }
 
@@ -489,6 +516,13 @@ final class ClipFlowStore: ObservableObject {
     private let fileManager = FileManager.default
     private let historyURL: URL
     private let imagesDirectoryURL: URL
+    private let cloudSyncCoordinator: ClipFlowCloudSyncCoordinator
+    private var localSyncTombstones: [UUID: Date] = [:] {
+        didSet { persistLocalSyncTombstones() }
+    }
+    private var cloudSyncLoopTask: Task<Void, Never>?
+    private var pendingCloudSyncTask: Task<Void, Never>?
+    private var isApplyingCloudSnapshot = false
 
     private init() {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
@@ -498,14 +532,25 @@ final class ClipFlowStore: ObservableObject {
         historyURL = appSupport.appendingPathComponent("history.json")
         imagesDirectoryURL = appSupport.appendingPathComponent("images", isDirectory: true)
         try? FileManager.default.createDirectory(at: imagesDirectoryURL, withIntermediateDirectories: true)
+        cloudSyncCoordinator = ClipFlowCloudSyncCoordinator(localImagesDirectoryURL: imagesDirectoryURL)
 
         capturePaused = defaults.object(forKey: Keys.capturePaused) as? Bool ?? false
         autoProtectSecrets = defaults.object(forKey: Keys.autoProtectSecrets) as? Bool ?? true
         launchAtLogin = Self.currentLaunchAtLoginState()
+        launchToStatusBar = defaults.object(forKey: Keys.launchToStatusBar) as? Bool ?? false
+        iCloudSyncEnabled = defaults.object(forKey: Keys.iCloudSyncEnabled) as? Bool ?? false
         excludedBundleIDs = defaults.stringArray(forKey: Keys.excludedBundleIDs) ?? Self.defaultExcludedBundleIDs
+        iCloudLastSyncedAt = defaults.object(forKey: Keys.iCloudLastSyncedAt) as? Date
+        localSyncTombstones = Self.decodeTombstones(from: defaults.data(forKey: Keys.iCloudSyncTombstones))
         items = loadItems()
         cleanupOrphanedImageFiles()
         selectedItemID = items.first?.id
+
+        if iCloudSyncEnabled {
+            Task { [weak self] in
+                self?.enableICloudSyncIfPossible(announceResult: false)
+            }
+        }
     }
 
     var filteredItems: [ClipboardItem] {
@@ -565,17 +610,21 @@ final class ClipFlowStore: ObservableObject {
     }
 
     var recentItems: [ClipboardItem] {
-        Array(sortedItems.prefix(12))
+        Array(sortedItems.prefix(50))
     }
 
     var quickPasteItems: [ClipboardItem] {
         let pins = sortedItems.filter(\.pinned)
         let recent = sortedItems.filter { !$0.pinned }
-        return Array((pins + recent).prefix(10))
+        return Array((pins + recent).prefix(50))
     }
 
     func count(for category: ClipCategory) -> Int {
         sortedItems.filter { matchesSelectedCategory($0, category: category) }.count
+    }
+
+    func item(withID id: UUID) -> ClipboardItem? {
+        items.first { $0.id == id }
     }
 
     func select(_ item: ClipboardItem) {
@@ -591,6 +640,7 @@ final class ClipFlowStore: ObservableObject {
 
     func delete(_ itemID: UUID) {
         if let item = items.first(where: { $0.id == itemID }) {
+            rememberCloudDeletion(for: [item])
             removeStoredAssetIfNeeded(for: item)
         }
         items.removeAll { $0.id == itemID }
@@ -600,6 +650,7 @@ final class ClipFlowStore: ObservableObject {
 
     func clearHistory() {
         let pinned = items.filter(\.pinned)
+        rememberCloudDeletion(for: items.filter { !$0.pinned })
         items.filter { !$0.pinned }.forEach(removeStoredAssetIfNeeded)
         items = pinned
         revealedItemIDs.removeAll()
@@ -716,6 +767,28 @@ final class ClipFlowStore: ObservableObject {
         }
     }
 
+    func setLaunchToStatusBar(_ enabled: Bool) {
+        launchToStatusBar = enabled
+        lastCaptureStatus = enabled ? "启动后将直接驻留状态栏" : "启动后将显示主窗口"
+    }
+
+    func setICloudSyncEnabled(_ enabled: Bool) {
+        if enabled {
+            iCloudSyncEnabled = true
+            defaults.set(true, forKey: Keys.iCloudSyncEnabled)
+            Task { [weak self] in
+                self?.enableICloudSyncIfPossible(announceResult: true)
+            }
+        } else {
+            pendingCloudSyncTask?.cancel()
+            cloudSyncLoopTask?.cancel()
+            iCloudSyncEnabled = false
+            defaults.set(false, forKey: Keys.iCloudSyncEnabled)
+            iCloudSyncPhase = .disabled
+            lastCaptureStatus = "已关闭 iCloud 同步"
+        }
+    }
+
     func toggleReveal(_ itemID: UUID) {
         if revealedItemIDs.contains(itemID) {
             revealedItemIDs.remove(itemID)
@@ -809,13 +882,54 @@ final class ClipFlowStore: ObservableObject {
         capturePaused ? "已暂停剪贴监听" : lastCaptureStatus
     }
 
-    private var sortedItems: [ClipboardItem] {
-        items.sorted { lhs, rhs in
-            if lhs.pinned != rhs.pinned {
-                return lhs.pinned && !rhs.pinned
-            }
-            return lhs.createdAt > rhs.createdAt
+    var iCloudSyncStatusValue: String {
+        switch iCloudSyncPhase {
+        case .disabled:
+            return "未启用"
+        case .syncing:
+            return "同步中"
+        case .active:
+            return "已连接"
+        case .unavailable:
+            return "不可用"
+        case .failed:
+            return "异常"
         }
+    }
+
+    var iCloudSyncTint: Color {
+        switch iCloudSyncPhase {
+        case .disabled:
+            return ClipCategory.all.tint
+        case .syncing:
+            return ClipCategory.quickPaste.tint
+        case .active:
+            return ClipCategory.smartStacks.tint
+        case .unavailable, .failed:
+            return ClipCategory.protected.tint
+        }
+    }
+
+    var iCloudSyncDetail: String {
+        switch iCloudSyncPhase {
+        case .disabled:
+            return "仅同步普通文本与图片历史，受保护内容会继续保留在本地。"
+        case .syncing:
+            return "正在合并本机与 iCloud 历史内容。"
+        case .active:
+            if let iCloudLastSyncedAt {
+                return "已连接 iCloud，上次同步于 \(Self.syncFormatter.string(from: iCloudLastSyncedAt))。受保护内容不会上传。"
+            }
+            return "已连接 iCloud，普通历史内容会在设备间同步。"
+        case .unavailable:
+            return cloudSyncCoordinator.resolveAvailabilityDescription() ?? "当前无法访问 iCloud 容器。"
+        case .failed(let message):
+            return message
+        }
+    }
+
+    private var sortedItems: [ClipboardItem] {
+        sortItems(items)
     }
 
     private func masked(text: String) -> String {
@@ -886,6 +1000,7 @@ final class ClipFlowStore: ObservableObject {
     private func trimItemsToLimit() {
         guard items.count > maxItems else { return }
         let overflow = Array(items.dropFirst(maxItems))
+        rememberCloudDeletion(for: overflow)
         overflow.forEach(removeStoredAssetIfNeeded)
         items = Array(items.prefix(maxItems))
     }
@@ -909,10 +1024,128 @@ final class ClipFlowStore: ObservableObject {
         }
     }
 
+    private func isEligibleForICloudSync(_ item: ClipboardItem) -> Bool {
+        !item.localOnly && !item.autoExpire
+    }
+
+    private func rememberCloudDeletion(for removedItems: [ClipboardItem]) {
+        let now = Date()
+        for item in removedItems where isEligibleForICloudSync(item) {
+            localSyncTombstones[item.id] = now
+        }
+    }
+
+    private func enableICloudSyncIfPossible(announceResult: Bool) {
+        startCloudSyncLoop()
+        runICloudSync(announceSuccess: announceResult)
+    }
+
+    private func startCloudSyncLoop() {
+        cloudSyncLoopTask?.cancel()
+        cloudSyncLoopTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(25))
+                self?.refreshICloudSyncIfNeeded()
+            }
+        }
+    }
+
+    private func refreshICloudSyncIfNeeded() {
+        guard iCloudSyncEnabled else { return }
+        runICloudSync(announceSuccess: false)
+    }
+
+    private func scheduleICloudSync() {
+        pendingCloudSyncTask?.cancel()
+        pendingCloudSyncTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(900))
+            self?.refreshICloudSyncIfNeeded()
+        }
+    }
+
+    private func runICloudSync(announceSuccess: Bool) {
+        guard iCloudSyncEnabled else { return }
+
+        iCloudSyncPhase = .syncing
+
+        do {
+            let result = try cloudSyncCoordinator.synchronize(
+                localItems: items,
+                tombstones: localSyncTombstones,
+                maxItems: maxItems
+            )
+
+            applyCloudItems(result.localItems)
+            localSyncTombstones = result.tombstones
+            iCloudLastSyncedAt = Date()
+            defaults.set(iCloudLastSyncedAt, forKey: Keys.iCloudLastSyncedAt)
+            iCloudSyncPhase = .active
+
+            if announceSuccess {
+                lastCaptureStatus = "已开启 iCloud 同步"
+            }
+        } catch let error as ClipFlowCloudSyncError {
+            handleICloudSyncFailure(error)
+        } catch {
+            handleICloudSyncFailure(.writeFailed)
+        }
+    }
+
+    private func handleICloudSyncFailure(_ error: ClipFlowCloudSyncError) {
+        pendingCloudSyncTask?.cancel()
+        cloudSyncLoopTask?.cancel()
+        iCloudSyncEnabled = false
+        defaults.set(false, forKey: Keys.iCloudSyncEnabled)
+
+        switch error {
+        case .unavailable:
+            iCloudSyncPhase = .unavailable
+            lastCaptureStatus = error.errorDescription ?? "iCloud 不可用"
+        case .invalidState, .writeFailed:
+            iCloudSyncPhase = .failed(error.errorDescription ?? "iCloud 同步失败")
+            lastCaptureStatus = error.errorDescription ?? "iCloud 同步失败"
+        }
+    }
+
+    private func applyCloudItems(_ cloudItems: [ClipboardItem]) {
+        let preservedLocalItems = items.filter { !isEligibleForICloudSync($0) }
+        var combinedByID = Dictionary(uniqueKeysWithValues: preservedLocalItems.map { ($0.id, $0) })
+
+        for item in cloudItems {
+            combinedByID[item.id] = item
+        }
+
+        let combinedItems = sortItems(Array(combinedByID.values))
+        guard combinedItems != items else { return }
+
+        isApplyingCloudSnapshot = true
+        items = combinedItems
+        isApplyingCloudSnapshot = false
+        cleanupOrphanedImageFiles()
+    }
+
+    private func sortItems(_ items: [ClipboardItem]) -> [ClipboardItem] {
+        items.sorted { lhs, rhs in
+            if lhs.pinned != rhs.pinned {
+                return lhs.pinned && !rhs.pinned
+            }
+            return lhs.createdAt > rhs.createdAt
+        }
+    }
+
+    private func persistLocalSyncTombstones() {
+        guard let data = try? JSONEncoder().encode(localSyncTombstones) else { return }
+        defaults.set(data, forKey: Keys.iCloudSyncTombstones)
+    }
+
     private enum Keys {
         static let capturePaused = "capturePaused"
         static let autoProtectSecrets = "autoProtectSecrets"
         static let launchAtLogin = "launchAtLogin"
+        static let launchToStatusBar = "launchToStatusBar"
+        static let iCloudSyncEnabled = "iCloudSyncEnabled"
+        static let iCloudLastSyncedAt = "iCloudLastSyncedAt"
+        static let iCloudSyncTombstones = "iCloudSyncTombstones"
         static let excludedBundleIDs = "excludedBundleIDs"
     }
 
@@ -932,6 +1165,19 @@ final class ClipFlowStore: ObservableObject {
             return false
         }
     }
+
+    private static func decodeTombstones(from data: Data?) -> [UUID: Date] {
+        guard let data else { return [:] }
+        return (try? JSONDecoder().decode([UUID: Date].self, from: data)) ?? [:]
+    }
+
+    private static let syncFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh-Hans")
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter
+    }()
 }
 
 enum ClipFlowCatalog {

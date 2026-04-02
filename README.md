@@ -24,7 +24,13 @@ open dist/ClipFlow.app
 
 For one-tap paste into other apps, macOS will ask for Accessibility permission the first time ClipFlow tries to send `Command + V`.
 
-Current MVP captures text clipboard content. Images, files, and richer pasteboard payloads are good next steps.
+Current MVP captures text and image clipboard content.
+
+## iCloud Sync
+
+ClipFlow now includes an optional iCloud history sync mode for regular text and image items. Protected items still remain local-only by design.
+
+To actually use iCloud sync on a packaged app, the build must be signed with an Apple Developer identity and iCloud capability enabled for the app identifier. The local ad-hoc build produced by `./scripts/build_app.sh` will compile and run, but iCloud sync may show as unavailable until the app is signed with the proper entitlement setup.
 
 ## Files
 
