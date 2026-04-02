@@ -11,6 +11,8 @@ ICON_PNG="$ROOT_DIR/assets/icon/ClipFlow-icon-1024.png"
 ICONSET_DIR="$DIST_DIR/ClipFlow.iconset"
 ICON_NAME="AppIcon"
 ICNS_PATH="$APP_DIR/Contents/Resources/$ICON_NAME.icns"
+APP_VERSION="${CLIPFLOW_VERSION:-0.1.0}"
+BUILD_NUMBER="${CLIPFLOW_BUILD_NUMBER:-1}"
 
 swift "$ROOT_DIR/scripts/render_icon.swift" "$ICON_PNG"
 
@@ -39,7 +41,7 @@ done
 
 iconutil -c icns "$ICONSET_DIR" -o "$ICNS_PATH"
 
-cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
+cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -61,9 +63,9 @@ cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>0.1.0</string>
+  <string>$APP_VERSION</string>
   <key>CFBundleVersion</key>
-  <string>1</string>
+  <string>$BUILD_NUMBER</string>
   <key>LSMinimumSystemVersion</key>
   <string>14.0</string>
   <key>NSHighResolutionCapable</key>
