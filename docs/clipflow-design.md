@@ -1,217 +1,368 @@
-# ClipFlow Design Spec
+# ClipFlow 设计说明
 
-## Product Thesis
+## 概述
 
-ClipFlow is a pointer-first clipboard companion for macOS. It should feel lighter than opening a manager window, safer than keeping raw history forever, and faster than manually hunting for the last copied item.
+ClipFlow 是一款面向 macOS 的原生剪切板辅助应用，围绕五个核心方向来构建：
 
-The core promise:
+- 在指针附近呼出
+- 用最少打断完成粘贴
+- 让历史内容具备智能组织能力
+- 默认重视隐私保护
+- 整体体验更像系统工具，而不是独立的内容后台
 
-- Summon near the pointer
-- Paste in one move
-- Group content intelligently
-- Respect privacy by default
-- Behave like a native system utility, not a detached dashboard
+它的目标不是做一个功能堆叠型剪切板管理器，而是让“复制、找回、再粘贴”这件高频小事变得更快、更自然，也更让人放心。
 
-## Target Users
+## 产品定位
 
-- Developers juggling code, commands, links, and tokens
-- Designers moving assets, text snippets, and references across apps
-- Researchers and operators curating repetitive fragments all day
-- Privacy-conscious users who want history without surveillance vibes
+大多数剪切板工具解决的是“存下来”，而 ClipFlow 更想解决“找得回、用得顺”。
 
-## Experience Principles
+因此产品体验应当优先强调：
 
-### 1. Pointer-first, not window-first
+- 第一时间看到最可能需要的内容
+- 尽量不离开当前工作上下文
+- 让信息比记忆更容易被识别
+- 把隐私控制放进日常交互，而不是埋进设置
+- 在窗口、菜单、快捷键和系统行为上都贴近 macOS 原生体验
 
-The fastest path should not require leaving the current context. Global invoke opens a compact HUD anchored near the pointer, with the most likely next paste already highlighted.
+ClipFlow 的感觉应该更接近 Spotlight、控制中心和 Quick Look，而不是传统的数据库式历史列表。
 
-### 2. Retrieval should beat recall
+## 目标用户
 
-Users should not need to remember exact text. Cards use app source, semantic labels, recency, privacy state, and short summaries to make visual scanning immediate.
+### 开发者
 
-### 3. Intelligence must stay legible
+频繁在代码、命令、日志、链接、令牌和片段之间切换的人。
 
-Smart grouping is useful only if it remains predictable. ClipFlow should explain why something is grouped as code, link, finance, credential, image, or temporary secret.
+### 设计师与内容创作者
 
-### 4. Privacy is an interaction feature
+频繁复制截图、参考资料、标签、链接、视觉素材与文案碎片的人。
 
-Privacy should not live only in settings. Masked previews, protected lanes, local-only badges, pause capture, exclusion rules, and auto-expiry need to be visible in day-to-day flows.
+### 研究人员与运营人员
 
-### 5. Native integration over feature sprawl
+整天在整理、比较、归档和复用小片段内容的人。
 
-ClipFlow wins by fitting into macOS patterns: menu bar access, global shortcut, Services, Quick Look style preview, drag and drop, login item support, Shortcuts integration, and polished window behavior.
+### 注重隐私的用户
 
-## Information Architecture
+希望保留复制历史，但不希望一切复制行为都被长期、无差别保存的人。
 
-ClipFlow has five primary surfaces:
+## 核心承诺
 
-1. Pointer HUD
-   - Compact launcher near cursor
-   - Top suggestions and one-keystroke paste
-   - Search, filter, and protected item reveal
+ClipFlow 应该让下面这条链路足够自然：
 
-2. Main Library
-   - Three-column layout
-   - Left: smart collections and privacy controls
-   - Center: clipboard timeline and suggested stacks
-   - Right: detail preview, paste targets, and protection state
+1. 在任意应用中复制内容
+2. 不离开当前上下文呼出 ClipFlow
+3. 立刻看到最可能需要的条目
+4. 用一个动作完成再次粘贴
 
-3. Menu Bar Presence
-   - Immediate access to recent items
-   - Capture pause, current status, and secure mode visibility
+其余能力，例如分类、历史库、预览、同步与规则控制，都应该服务于这条主链路，而不是喧宾夺主。
 
-4. Privacy Settings
-   - Excluded apps
-   - Auto-expire rules
-   - Local-only capture
-   - Redaction and masked previews
+## 体验原则
 
-5. Secure Vault Lane
-   - Passwords, codes, or sensitive data
-   - Separate reveal interaction
-   - Optional shorter retention windows
+### 1. 指针优先，而不是窗口优先
 
-## Core Flows
+最快的路径应当从鼠标附近开始，而不是总从一个大窗口开始。快速粘贴面板应贴近指针出现，并尽量保持用户当前上下文不被打断。
 
-## Flow A: Quick paste near pointer
+### 2. 识别优于回忆
 
-1. User copies content in any app
-2. ClipFlow classifies the content locally
-3. User invokes ClipFlow with a global shortcut
-4. HUD opens near pointer, not centered on screen
-5. Best match is preselected and can be pasted immediately
-6. Arrow keys or search narrow the list without losing pointer context
+用户不应该依赖“记住原文”来找内容。条目需要通过类型、来源、时间、预览和分组信息，让用户一眼识别。
 
-Success metric: one invoke, one confirm, one paste
+### 3. 智能必须可理解
 
-## Flow B: Browse and recover older context
+智能分类只有在“可预期”时才成立。如果 ClipFlow 把内容归为链接、代码、图片或受保护项，界面要能让这种归类显得合理、可理解，而不是神秘。
 
-1. User opens the main library from the menu bar or shortcut
-2. Smart collections separate code, links, files, protected items, and pinned snippets
-3. Rich cards display source app, labels, time, and privacy state
-4. Detail pane supports inspection before paste or share
+### 4. 隐私是主流程的一部分
 
-Success metric: find older content in under five seconds
+隐私不应该只存在于设置页。敏感内容遮罩、排除应用、暂停监听、本地保留、过期策略等，都应该在日常使用中可见、可理解、可调整。
 
-## Flow C: Protect sensitive snippets
+### 5. 系统级融入比功能堆叠更重要
 
-1. ClipFlow detects credentials, codes, finance, or secret-like patterns
-2. Item is routed into the protected lane with masked preview
-3. User can choose local-only, auto-expire, or never save
-4. Sensitive apps can be excluded entirely from capture
+ClipFlow 的价值来自“贴合系统”。菜单栏、全局快捷键、登录启动、贴板恢复、窗口行为、链接打开与辅助功能粘贴链路，远比增加花哨但脱离场景的功能更重要。
 
-Success metric: privacy state is obvious at glance and reversible
+## 核心界面
 
-## Visual Direction
+### 1. 快捷粘贴 HUD
 
-ClipFlow should feel calm, precise, and premium:
+这是通过全局快捷键呼出的高频入口，显示在鼠标附近。
 
-- Base tone: warm paper and frosted glass, not sterile white
-- Accent palette: copper, saffron, and lake blue
-- Shape language: rounded rectangles, floating panels, subtle depth
-- Typography: native SF with generous weight contrast and spacious line height
-- Motion: quick spring transitions around 220-260 ms, with panels feeling attached to pointer movement
+职责：
 
-The UI should avoid looking like a generic admin tool. Clipboard history is a high-frequency surface; density matters, but each layer should still feel breathable.
+- 展示最近最可用的内容
+- 支持快速选择与立即粘贴
+- 允许键盘导航和快速扫描
+- 需要时可展开查看详细信息
 
-## Key UI Components
+这是整个产品使用频率最高的界面。
 
-### Pointer HUD
+### 2. 主窗口历史库
 
-- Small floating panel with strong focus ring
-- Search field always available
-- Top result with semantic badge and paste target hints
-- Reveal control for protected entries
-- Keyboard-first navigation
+主窗口用于更完整地浏览、筛选、检查和管理剪切板历史。
 
-### Clipboard Card
+职责：
 
-- Source app identity
-- Item kind badge
-- Time stamp
-- Snippet preview
-- Smart labels
-- Privacy state chip
-- Primary action: Paste
+- 展示历史内容与分类集合
+- 支持条目检查、删除、置顶与复用
+- 呈现更丰富的预览与上下文信息
+- 为设置相关流程提供稳定空间
 
-### Detail Preview
+### 3. 状态栏菜单
 
-- Large readable preview
-- Context summary explaining grouping
-- Paste target suggestions
-- Retention and privacy controls
-- Quick actions: pin, copy again, reveal, purge
+状态栏菜单是 ClipFlow 在系统中的轻量常驻形态。
 
-### Collection Rail
+职责：
 
-- All items
-- Quick paste
-- Smart stacks
-- Code
-- Links
-- Files
-- Protected
+- 显示当前监听状态
+- 展示最近历史内容
+- 提供打开主窗口与快捷面板的入口
+- 提供暂停、重启、退出等高频操作
 
-## Privacy Model
+### 4. 设置页
 
-Privacy must be layered:
+设置页定义的是产品的信任模型与长期行为。
 
-- Default local processing for classification
-- App exclusion list for banking, password managers, terminals, or custom apps
-- Temporary pause capture from menu bar or HUD
-- Separate protected lane with masked previews
-- Auto-expire timers for secrets and one-time codes
-- Manual purge of single items or time ranges
-- Clear indicators for local-only items and unsynced storage
+职责：
 
-## System Integration
+- 管理启动行为
+- 配置排除应用与隐私策略
+- 配置开机启动和 iCloud 同步
+- 调整监听与保存方式
 
-ClipFlow should integrate with the platform through:
+## 内容类型
 
-- `NSPasteboard` for capture and restore
-- Menu bar extra for status and fast access
-- Global shortcut for invoke
-- Accessibility APIs to anchor HUD near pointer and active UI context
-- Login item support
-- Shortcuts and Services for automation
-- Drag and drop to apps and Finder
-- Quick Look style inspection for files and images
+ClipFlow 不应把所有复制内容都视为同一种字符串，而应把它们视为具备类型的内容。
 
-## Suggested Technical Architecture
+当前及预期支持的内容类型包括：
 
-- SwiftUI for app shell and native panel composition
-- AppKit bridges for global hotkey, menu bar behavior, pointer anchoring, and pasteboard hooks
-- Local store for metadata, retention, and protected flags
-- On-device classifiers for semantic grouping
-- Rules engine for exclusions, expiry, and confidence thresholds
+- 文本
+- 链接
+- 代码
+- 图片
+- 敏感或受保护内容
 
-## MVP Scope
+每种类型都应具备：
 
-- Clipboard capture timeline
-- Pointer HUD invoke
-- Smart collections
-- Search
-- Pinned items
-- Protected lane with masked previews
-- Menu bar extra
-- Excluded app list
+- 清晰可辨的图标
+- 可读的标题
+- 合适的预览样式
+- 符合场景的默认操作
 
-## V2 Expansion
+例如图片条目应显示尺寸信息，如 `图片 710 × 830`；链接条目则应支持直接用默认浏览器打开。
 
-- OCR for copied images
-- Named stacks and project contexts
-- Cross-device sync with explicit trust model
-- Team snippet handoff
-- AI-assisted rewrite or summarization before paste
+## 核心用户流程
 
-## Prototype Mapping
+### 流程 A：在指针附近快速粘贴
 
-The SwiftUI prototype in this repo visualizes:
+1. 用户在其他应用中复制内容
+2. ClipFlow 在本地完成捕获与分类
+3. 用户按下 `Option + V`
+4. 快捷面板在指针附近出现，并保证完整显示
+5. 用户选择或双击某个条目
+6. ClipFlow 恢复该内容到剪切板、自动隐藏面板、回到目标上下文并触发粘贴
 
-- A premium native desktop layout
-- Pointer HUD concept
-- Collection rail and timeline cards
-- Detail preview with paste actions
-- Privacy surface and system integration concepts
+成功标准：
+一次呼出、一次动作、一次完成粘贴。
 
-It is intentionally a concept prototype, not a full clipboard daemon.
+### 流程 B：找回较早的历史内容
+
+1. 用户打开主窗口
+2. 按分类、内容类型或时间浏览历史
+3. 在居中的详情浮层里查看完整信息
+4. 重新粘贴、置顶、显示敏感内容，或删除该条目
+
+成功标准：
+用户能在几秒内找到并理解较早的复制内容。
+
+### 流程 C：安全处理敏感内容
+
+1. ClipFlow 识别出敏感内容，或用户将其视为敏感内容
+2. 条目以更受保护的方式呈现
+3. 它可以被隐藏、排除同步、自动过期，或根本不保存
+4. 某些敏感应用也可以从源头上被排除监听
+
+成功标准：
+用户能清楚知道某项内容是否敏感，以及当前处于什么保护状态。
+
+### 流程 D：通过状态栏进行轻量控制
+
+1. 用户打开状态栏菜单
+2. 快速看到当前状态、最近内容和高频操作
+3. 无需进入主窗口也能完成粘贴、暂停监听、打开主窗口或退出应用
+
+成功标准：
+状态栏菜单保持短小、实用、直接。
+
+## 视觉方向
+
+ClipFlow 应呈现“高级、克制、原生”的感觉。
+
+视觉特征：
+
+- 深色、柔和分层的表面，而不是生硬的工具面板
+- 用橙色、铜色、蓝色等暖冷平衡的强调色做语义区分
+- 圆角几何与稳定卡片感
+- 关键文字与数字保持高对比
+- 高频区域采用更紧凑的间距
+- 使用轻微的通透感与层次，而不是堆叠装饰
+
+它需要避免两个极端：
+
+- 不要像冷冰冰的后台管理系统
+- 也不要像过度炫技、牺牲清晰度的概念设计
+
+## 布局原则
+
+### 快捷粘贴面板
+
+快捷面板应当小而密，尽量提高每次呼出的效率。
+
+规则：
+
+- 贴近指针出现
+- 无论鼠标在屏幕哪一侧都不能显示不完整
+- 当前选中态要足够明确
+- 条目高度要足够紧凑，以容纳更多最近内容
+- 需要查看详情时再进入扩展信息层
+
+### 主窗口
+
+主窗口既要支持完整浏览，也要支持适度缩放。
+
+规则：
+
+- 历史内容区域必须始终是视觉中心
+- 详情查看应以浮层方式出现，而不是永远占据一个竞争性的固定侧栏
+- 空状态需要起到引导作用，但不应占据主舞台
+- 操作控件的视觉权重应低于内容本身
+
+### 状态栏菜单
+
+状态栏菜单更应像一个紧凑的控制面板，而不是一个缩小版首页。
+
+规则：
+
+- 尽量减少板块数量
+- 减少冗余说明文字
+- 更强调直接动作，而不是装饰性分组
+- 在显示更多历史的同时，避免整体显得臃肿
+
+## 组件原则
+
+### 历史条目卡片
+
+每个条目应当清楚表达：
+
+- 内容类型
+- 标题
+- 预览
+- 时间
+- 来源应用
+- 隐私状态
+
+图片类条目应采用：
+
+- 左侧独立的图片类型图标
+- 正文区域内显示真实缩略图
+- 标题中直接带尺寸信息
+
+### 详情浮层
+
+详情层应支持深入查看，而不破坏周围布局。
+
+它应当：
+
+- 在主窗口中央浮出
+- 在合适的场景下支持左键和右键触发
+- 对长内容提供滚动能力
+- 在主窗口、快捷面板和状态栏菜单之间尽量复用同一种认知模型
+
+### 操作按钮
+
+操作按钮应保持紧凑、统一、对齐。
+
+设计上应避免：
+
+- 在高密度区域出现过高、过大的按钮
+- 图标与文字基线不一致
+- 同一区域中出现太多互相竞争的按钮风格
+
+## 隐私模型
+
+ClipFlow 应以“默认本地处理”为前提。
+
+原则：
+
+- 分类尽量在本地完成
+- 受保护项要有明确视觉状态
+- 敏感内容预览默认可遮罩
+- 被排除的应用绝不进入监听
+- 用户可随时暂停监听
+- 保留策略必须清晰
+- 同步项与仅本地项要区分明确
+
+受保护内容不只是一个存储规则，也是一种应被用户感知到的交互状态。
+
+## 同步模型
+
+iCloud 同步应该被视为便利层，而不是隐藏假设。
+
+规则：
+
+- 普通文本和图片历史可以同步
+- 受保护内容默认只保留本地
+- 同步状态应能在设置中被清楚理解
+- 当系统能力不可用时，应用需要明确说明，而不是沉默失败
+
+## 系统集成
+
+ClipFlow 应尽量深度接入 macOS：
+
+- 使用 `NSPasteboard` 完成捕获与恢复
+- 通过 AppKit 桥接全局快捷键与状态栏行为
+- 使用辅助功能能力完成自动粘贴与上下文回填
+- 支持登录启动
+- 集成菜单栏形态
+- 保持原生窗口行为
+- 对链接使用默认浏览器打开
+
+系统适配是产品价值的一部分，而不只是工程实现细节。
+
+## 技术方向
+
+建议的实现方向：
+
+- 以 SwiftUI 构建大部分界面
+- 以 AppKit 处理状态栏、浮动面板、全局快捷键与窗口控制
+- 用本地持久化记录历史与元数据
+- 以规则为基础做内容分类，并为后续更强的本地智能预留空间
+- 清晰拆分捕获、存储、界面状态与系统动作
+
+## MVP 范围
+
+首个公开版本应重点聚焦：
+
+- 剪切板历史捕获
+- 指针附近呼出的快捷面板
+- 文本与图片支持
+- 链接识别
+- 基于类型的条目标题
+- 状态栏入口
+- 隐私默认策略与排除应用
+- 启动行为与开机启动设置
+
+## 后续扩展
+
+后续可考虑：
+
+- 更完整的文件类内容支持
+- 图片 OCR
+- 更强的语义分组能力
+- 正式签名后的完善 iCloud 同步
+- 项目化内容栈
+- 自动化与快捷指令集成
+- 更完善的敏感内容工作流
+
+## 产品判断标准
+
+ClipFlow 最终应该满足一个简单标准：
+
+它是否在不让用户感到被监视、不让界面变得臃肿、也不把用户拉出当前上下文的前提下，让“再次使用复制内容”这件事变得更快？
+
+如果答案是肯定的，这个设计就是成立的。
