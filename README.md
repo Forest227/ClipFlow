@@ -1,38 +1,94 @@
-# ClipFlow
+# ClipFlow 剪流
 
-ClipFlow is a macOS clipboard concept app focused on pointer-first invocation, instant paste, smart grouping, privacy defaults, and deep system integration.
+ClipFlow 是一款面向 macOS 的原生剪切板管理应用，围绕“指针处呼出、快速粘贴、智能分类、隐私优先、系统级集成”来设计。它希望比传统剪切板管理器更轻、更快，也更适合高频复制粘贴的真实工作流。
 
-This repository includes:
+当前仓库包含：
 
-- A native SwiftUI concept prototype
-- A functional initial clipboard app shell with live capture, menu bar access, quick-paste HUD, and privacy heuristics
-- A product and UX design spec for the app direction
+- 一个可运行的 SwiftUI / AppKit 原生应用
+- 指针附近快速呼出的快捷粘贴面板
+- 状态栏入口、主窗口、设置页与隐私控制
+- 产品设计文档与原型演进说明
 
-## Run
+## 核心特性
+
+- 指针附近呼出：按 `Option + V` 在鼠标附近打开快捷粘贴面板
+- 快速粘贴：双击条目即可回填剪贴板并触发粘贴
+- 智能分类：自动识别文本、链接、代码、图片、敏感内容等类型
+- 中文界面：主窗口、状态栏菜单、快捷面板与设置页均已中文化
+- 图片支持：可记录复制的图片，并在列表中展示缩略图与分辨率
+- 隐私优先：支持敏感内容遮罩、排除应用、暂停监听、自动过期
+- 状态栏工作流：支持从菜单栏查看最近历史、打开主窗口、重启或退出应用
+- iCloud 同步开关：可同步普通历史内容，受保护内容默认仅保留本地
+
+## 当前版本
+
+当前发布版本为 `v0.0.1`，已经提供本地构建好的 `.app` 与 `.dmg` 安装包。
+
+## 运行环境
+
+- macOS 14 或更高版本
+- Swift 6
+- Xcode 16 或支持 Swift 6 的命令行工具
+
+## 本地运行
 
 ```bash
 swift build
 swift run ClipFlowApp
 ```
 
-## Build Local `.app`
+## 构建应用
 
 ```bash
 ./scripts/build_app.sh
 open dist/ClipFlow.app
 ```
 
-For one-tap paste into other apps, macOS will ask for Accessibility permission the first time ClipFlow tries to send `Command + V`.
+若需要本地 release 安装包，可使用当前仓库中的产物：
 
-Current MVP captures text and image clipboard content.
+- `dist/release/ClipFlow-v0.0.1.dmg`
+- `dist/release/ClipFlow-v0.0.1.dmg.sha256`
 
-## iCloud Sync
+## 权限说明
 
-ClipFlow now includes an optional iCloud history sync mode for regular text and image items. Protected items still remain local-only by design.
+- 首次使用一键粘贴时，macOS 会请求“辅助功能”权限
+- 若未授予权限，ClipFlow 仍可记录历史，但无法自动把内容粘贴回目标输入框
+- iCloud 同步需要正确签名并启用对应 capability，当前本地 ad-hoc 构建可能显示为不可用
 
-To actually use iCloud sync on a packaged app, the build must be signed with an Apple Developer identity and iCloud capability enabled for the app identifier. The local ad-hoc build produced by `./scripts/build_app.sh` will compile and run, but iCloud sync may show as unavailable until the app is signed with the proper entitlement setup.
+## 项目结构
 
-## Files
+- `Sources/ClipFlowApp`：应用主代码，包含窗口、状态栏、快捷面板、模型与服务逻辑
+- `docs/clipflow-design.md`：产品设计文档与交互思路
+- `docs/releases/v0.0.1.md`：`v0.0.1` GitHub Release 发布说明
+- `scripts/build_app.sh`：本地打包 `.app` 的脚本
+- `scripts/render_icon.swift`：应用图标生成脚本
 
-- `Sources/ClipFlowApp`: SwiftUI prototype
-- `docs/clipflow-design.md`: product vision, IA, interaction model, privacy, and roadmap
+## 设计方向
+
+ClipFlow 的目标不是做一个功能堆叠型剪切板工具，而是提供一种更贴近 macOS 原生体验的复制工作流：
+
+- 更快：减少切换窗口的成本
+- 更稳：尽量用系统级能力完成监听、呼出和粘贴
+- 更清晰：让内容类型、来源和隐私状态一眼可见
+- 更克制：保持高频工具该有的紧凑与整洁
+
+## 已实现能力
+
+- 文本、链接、代码、图片内容捕获
+- 主窗口历史列表与详情查看
+- 状态栏最近内容菜单
+- 快捷呼出面板
+- 条目右键查看详细信息
+- 链接访问按钮
+- 图片缩略图与尺寸显示
+- 启动时驻留状态栏
+- 开机自动启动开关
+- 本地历史持久化
+
+## 后续方向
+
+- 更完善的 iCloud 多设备同步
+- 更正式的签名与发布流程
+- 更多内容类型支持
+- 更细的规则引擎与自动化能力
+- 发布版图标、欢迎页与权限引导继续打磨
