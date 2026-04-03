@@ -41,11 +41,11 @@ enum ClipFlowCloudSyncError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .unavailable:
-            return "当前无法访问 iCloud，请确认已登录 iCloud，并为 App 启用 iCloud 能力。"
+            return "当前无法访问“文稿/ClipFlow”，请确认已允许 ClipFlow 读写“文稿”文件夹。"
         case .invalidState:
-            return "iCloud 历史数据不可读取。"
+            return "“文稿/ClipFlow”中的历史数据不可读取。"
         case .writeFailed:
-            return "写入 iCloud 历史失败。"
+            return "写入“文稿/ClipFlow”失败。"
         }
     }
 }
@@ -53,11 +53,11 @@ enum ClipFlowCloudSyncError: LocalizedError {
 struct ClipFlowCloudSyncCoordinator {
     private let fileManager = FileManager.default
     private let localImagesDirectoryURL: URL
-    private let containerIdentifier: String?
+    private let documentsFolderName: String
 
-    init(localImagesDirectoryURL: URL, containerIdentifier: String? = nil) {
+    init(localImagesDirectoryURL: URL, documentsFolderName: String = "ClipFlow") {
         self.localImagesDirectoryURL = localImagesDirectoryURL
-        self.containerIdentifier = containerIdentifier
+        self.documentsFolderName = documentsFolderName
     }
 
     func synchronize(
@@ -97,6 +97,11 @@ struct ClipFlowCloudSyncCoordinator {
             try prepareCloudAssetIfNeeded(for: item, cloudImagesDirectoryURL: locations.imagesURL)
         }
 
+        cleanupRemoteAssets(
+            in: locations.imagesURL,
+            keeping: Set(mergedItems.compactMap(\.imageFilename))
+        )
+
         let localReadyItems = mergedItems.filter {
             ensureLocalAssetIfNeeded(for: $0, cloudImagesDirectoryURL: locations.imagesURL)
         }
@@ -116,33 +121,29 @@ struct ClipFlowCloudSyncCoordinator {
     }
 
     func resolveAvailabilityDescription() -> String? {
-        guard fileManager.ubiquityIdentityToken != nil else {
-            return "未检测到可用的 iCloud 账号"
+        do {
+            _ = try resolveLocations()
+            return nil
+        } catch {
+            return "无法访问“文稿”目录，请在系统设置的“隐私与安全性”里允许 ClipFlow 读写文稿文件夹。"
         }
-
-        guard fileManager.url(forUbiquityContainerIdentifier: containerIdentifier) != nil else {
-            return "当前构建未启用 iCloud 容器"
-        }
-
-        return nil
     }
 
     private func resolveLocations() throws -> ClipFlowCloudSyncLocations {
-        guard fileManager.ubiquityIdentityToken != nil else {
+        guard let documentsURL = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first else {
             throw ClipFlowCloudSyncError.unavailable
         }
 
-        guard let containerURL = fileManager.url(forUbiquityContainerIdentifier: containerIdentifier) else {
-            throw ClipFlowCloudSyncError.unavailable
-        }
-
-        let documentsURL = containerURL.appendingPathComponent("Documents", isDirectory: true)
-        let rootURL = documentsURL.appendingPathComponent("ClipFlow", isDirectory: true)
+        let rootURL = documentsURL.appendingPathComponent(documentsFolderName, isDirectory: true)
         let imagesURL = rootURL.appendingPathComponent("images", isDirectory: true)
-        let historyURL = rootURL.appendingPathComponent("history-sync.json")
+        let historyURL = rootURL.appendingPathComponent("history.json")
 
-        try fileManager.createDirectory(at: rootURL, withIntermediateDirectories: true)
-        try fileManager.createDirectory(at: imagesURL, withIntermediateDirectories: true)
+        do {
+            try fileManager.createDirectory(at: rootURL, withIntermediateDirectories: true)
+            try fileManager.createDirectory(at: imagesURL, withIntermediateDirectories: true)
+        } catch {
+            throw ClipFlowCloudSyncError.unavailable
+        }
         return ClipFlowCloudSyncLocations(historyURL: historyURL, imagesURL: imagesURL)
     }
 
@@ -257,6 +258,16 @@ struct ClipFlowCloudSyncCoordinator {
             return true
         } catch {
             return false
+        }
+    }
+
+    private func cleanupRemoteAssets(in directoryURL: URL, keeping filenames: Set<String>) {
+        guard let fileURLs = try? fileManager.contentsOfDirectory(at: directoryURL, includingPropertiesForKeys: nil) else {
+            return
+        }
+
+        for fileURL in fileURLs where !filenames.contains(fileURL.lastPathComponent) {
+            try? fileManager.removeItem(at: fileURL)
         }
     }
 

@@ -85,6 +85,10 @@ final class ClipFlowRuntime: NSObject {
         pasteService.paste(item, preferredTarget: lastExternalApp)
     }
 
+    func copyToClipboard(_ item: ClipboardItem) {
+        pasteService.copyToClipboard(item)
+    }
+
     func openLibrary() {
         hudController.hide()
         AppNavigationCenter.shared.openLibraryWindow?()
@@ -114,7 +118,7 @@ final class ClipFlowRuntime: NSObject {
         do {
             try process.run()
             store.lastCaptureStatus = "正在重启 ClipFlow"
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + ClipFlowMotion.relaunchDelay) {
                 NSApp.terminate(nil)
             }
         } catch {
@@ -176,11 +180,12 @@ final class ClipboardMonitor {
     func start() {
         guard timer == nil else { return }
 
-        timer = Timer.scheduledTimer(withTimeInterval: 0.55, repeats: true) { [weak self] _ in
+        timer = Timer.scheduledTimer(withTimeInterval: ClipFlowMotion.clipboardPollInterval, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.poll()
             }
         }
+        timer?.tolerance = ClipFlowMotion.clipboardPollTolerance
     }
 
     func ignoreNextPasteboardUpdate() {
@@ -277,11 +282,24 @@ final class PasteService {
             return
         }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + ClipFlowMotion.pasteActivationDelay) {
             self.sendPasteShortcut()
         }
 
         store.lastCaptureStatus = "已粘贴到 \(targetApp?.localizedName ?? "前台应用")"
+    }
+
+    func copyToClipboard(_ item: ClipboardItem) {
+        monitor?.ignoreNextPasteboardUpdate()
+
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        guard restore(item, to: pasteboard) else {
+            store.lastCaptureStatus = item.isImage ? "图片资源不可用，请重新复制一次" : "复制到剪贴板失败"
+            return
+        }
+
+        store.lastCaptureStatus = "已复制到剪贴板，可在目标输入框中手动粘贴"
     }
 
     private func restore(_ item: ClipboardItem, to pasteboard: NSPasteboard) -> Bool {
@@ -398,7 +416,7 @@ final class HotKeyController {
 }
 
 @MainActor
-final class QuickPastePanelController {
+final class QuickPastePanelController: NSObject, NSWindowDelegate {
     private let store: ClipFlowStore
     private let onPaste: (ClipboardItem) -> Void
     private let onOpenLibrary: () -> Void
@@ -419,7 +437,7 @@ final class QuickPastePanelController {
     }
 
     func show(anchorAt mouseLocation: CGPoint, preferredTarget: NSRunningApplication?) {
-        let panel = panel ?? makePanel()
+        let panel = makePanel()
         panel.contentView = NSHostingView(
             rootView: QuickPastePanelView(
                 store: store,
@@ -430,6 +448,7 @@ final class QuickPastePanelController {
                     self?.hide()
                 }
             )
+            .preferredColorScheme(store.appearanceMode.preferredColorScheme)
         )
 
         configurePanelMask(panel)
@@ -439,10 +458,23 @@ final class QuickPastePanelController {
     }
 
     func hide() {
-        panel?.orderOut(nil)
+        guard let panel else { return }
+        panel.delegate = nil
+        panel.contentView = nil
+        panel.orderOut(nil)
+        panel.close()
+        self.panel = nil
     }
 
     private func makePanel() -> QuickPastePanel {
+        if let existing = panel {
+            existing.delegate = nil
+            existing.contentView = nil
+            existing.orderOut(nil)
+            existing.close()
+            self.panel = nil
+        }
+
         let panel = QuickPastePanel(
             contentRect: NSRect(x: 0, y: 0, width: QuickPastePanelLayout.panelWidth, height: QuickPastePanelLayout.panelHeight),
             styleMask: [.borderless, .nonactivatingPanel],
@@ -457,8 +489,14 @@ final class QuickPastePanelController {
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         panel.animationBehavior = .utilityWindow
+        panel.delegate = self
         self.panel = panel
         return panel
+    }
+
+    func windowDidResignKey(_ notification: Notification) {
+        guard notification.object as? QuickPastePanel === panel else { return }
+        hide()
     }
 
     private func configurePanelMask(_ panel: QuickPastePanel) {
@@ -538,6 +576,10 @@ final class QuickPastePanelController {
 final class QuickPastePanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    override func cancelOperation(_ sender: Any?) {
+        orderOut(nil)
+    }
 }
 
 struct QuickPastePanelView: View {
@@ -550,24 +592,26 @@ struct QuickPastePanelView: View {
     @State private var query = ""
     @State private var selectedItemID: UUID?
     @State private var inspectingItemID: UUID?
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        let palette = ClipFlowPalette.resolve(for: .light)
+        let palette = ClipFlowPalette.resolve(for: colorScheme)
+        let isDark = colorScheme == .dark
         let clips = store.hudItems(matching: query)
 
         ZStack {
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: ClipFlowSpacing.md) {
                 HStack {
                     Label("快速粘贴", systemImage: "cursorarrow.rays")
-                        .font(.system(size: 13, weight: .bold, design: .rounded))
+                        .font(ClipFlowTypography.bodyBold)
 
                     Spacer()
 
                     Button("关闭", action: onClose)
-                        .buttonStyle(HUDCompactButtonStyle(fill: palette.secondaryButtonFill))
+                        .buttonStyle(ClipFlowButtonStyle(fill: palette.secondaryButtonFill, size: .compact))
                 }
 
-                HStack(spacing: 8) {
+                HStack(spacing: ClipFlowSpacing.sm) {
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(Color.secondary)
@@ -576,42 +620,44 @@ struct QuickPastePanelView: View {
                         .textFieldStyle(.plain)
                         .font(.system(size: 12, weight: .medium))
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
+                .padding(.horizontal, ClipFlowSpacing.inputPaddingH)
+                .padding(.vertical, ClipFlowSpacing.inputPaddingV)
                 .background(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    RoundedRectangle(cornerRadius: ClipFlowRadius.menuButton, style: .continuous)
                         .fill(palette.inputFill)
                 )
 
                 if clips.isEmpty {
-                    VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: ClipFlowSpacing.sm) {
                         Text("还没有捕获到内容")
-                            .font(.system(size: 15, weight: .bold, design: .rounded))
+                            .font(ClipFlowTypography.sectionTitle)
                         Text("先去其他应用复制文字或图片，然后按下 Option + V，就能在指针附近把它调出来。")
-                            .font(.system(size: 12, weight: .medium))
+                            .font(ClipFlowTypography.caption)
                             .foregroundStyle(Color.secondary)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                    .padding(.top, 8)
+                    .padding(.top, ClipFlowSpacing.sm)
                 } else {
                     ScrollView {
-                        LazyVStack(spacing: 8) {
+                        LazyVStack(spacing: ClipFlowSpacing.sm) {
                             ForEach(clips) { item in
-                                HUDInteractiveRow(
-                                    item: item,
-                                    store: store,
-                                    isSelected: selectedItemID == item.id,
-                                    onSelect: {
+                                InteractiveCard(
+                                    rootView: AnyView(
+                                        HUDRow(item: item, store: store, isSelected: selectedItemID == item.id)
+                                    ),
+                                    onPrimary: {
                                         selectedItemID = item.id
                                     },
-                                    onPaste: {
+                                    onDoubleTap: {
                                         selectedItemID = item.id
                                         onClose()
                                         onPaste(item)
                                     },
-                                    onInspect: {
+                                    onSecondary: {
                                         selectedItemID = item.id
-                                        inspectingItemID = inspectingItemID == item.id ? nil : item.id
+                                        withAnimation(ClipFlowMotion.overlay) {
+                                            inspectingItemID = inspectingItemID == item.id ? nil : item.id
+                                        }
                                     }
                                 )
                             }
@@ -620,12 +666,12 @@ struct QuickPastePanelView: View {
                     .scrollIndicators(.hidden)
                 }
 
-                HStack(spacing: 8) {
+                HStack(spacing: ClipFlowSpacing.sm) {
                     Button("打开主窗口") {
                         onClose()
                         onOpenLibrary()
                     }
-                    .buttonStyle(HUDCompactButtonStyle(fill: palette.secondaryButtonFill))
+                    .buttonStyle(ClipFlowButtonStyle(fill: palette.secondaryButtonFill, size: .compact))
 
                     Button("粘贴选中项") {
                         if let selected = clips.first(where: { $0.id == selectedItemID }) ?? clips.first {
@@ -634,25 +680,32 @@ struct QuickPastePanelView: View {
                             onPaste(selected)
                         }
                     }
-                    .buttonStyle(HUDCompactButtonStyle(fill: palette.primaryButtonFill, foreground: .white))
+                    .buttonStyle(ClipFlowButtonStyle(fill: palette.primaryButtonFill, foreground: .white, size: .compact))
                 }
             }
-            .blur(radius: inspectingItem == nil ? 0 : 2)
+            .blur(radius: inspectingItem == nil ? 0 : ClipFlowMotion.backgroundDefocusRadius)
 
             if let inspectingItem {
                 HUDInspectorOverlay(
                     item: inspectingItem,
                     store: store,
-                    onClose: { inspectingItemID = nil },
+                    onClose: {
+                        withAnimation(ClipFlowMotion.overlay) {
+                            inspectingItemID = nil
+                        }
+                    },
                     onPaste: {
-                        inspectingItemID = nil
+                        withAnimation(ClipFlowMotion.overlay) {
+                            inspectingItemID = nil
+                        }
                         onClose()
                         onPaste(inspectingItem)
                     }
                 )
+                .transition(ClipFlowMotion.overlayTransition)
             }
         }
-        .padding(14)
+        .padding(ClipFlowSpacing.cardPadding)
         .frame(width: QuickPastePanelLayout.panelWidth, height: QuickPastePanelLayout.panelHeight, alignment: .topLeading)
         .onAppear {
             if selectedItemID == nil {
@@ -669,9 +722,9 @@ struct QuickPastePanelView: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: QuickPastePanelLayout.cornerRadius, style: .continuous)
-                .stroke(Color.white.opacity(0.72), lineWidth: 1)
+                .stroke(isDark ? Color.white.opacity(0.18) : Color.white.opacity(0.72), lineWidth: 1)
         )
-        .shadow(color: Color.black.opacity(0.15), radius: 24, x: 0, y: 18)
+        .shadow(color: Color.black.opacity(isDark ? 0.35 : 0.15), radius: 24, x: 0, y: 18)
     }
 
     private var inspectingItem: ClipboardItem? {
@@ -684,30 +737,40 @@ struct HUDRow: View {
     let item: ClipboardItem
     let store: ClipFlowStore
     let isSelected: Bool
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var isDark: Bool { colorScheme == .dark }
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             ZStack {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(tint.opacity(0.14))
+                RoundedRectangle(cornerRadius: ClipFlowRadius.badge, style: .continuous)
+                    .fill(item.kind.tint.opacity(0.14))
                     .frame(width: 34, height: 34)
 
-                Image(systemName: iconName)
+                Image(systemName: item.kind.iconName)
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(tint)
+                    .foregroundStyle(item.kind.tint)
             }
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
-                    Text(item.title)
-                        .font(.system(size: 13, weight: .bold, design: .rounded))
-                        .lineLimit(1)
+                    Text(item.isImage ? item.title : store.displaySnippet(for: item))
+                        .font(ClipFlowTypography.bodyBold)
+                        .lineLimit(item.isImage ? 1 : 2)
 
                     Spacer()
 
                     Text(item.timeLabel)
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(ClipFlowTypography.badge)
                         .foregroundStyle(Color.secondary)
+                }
+
+                if !item.isImage {
+                    Text(item.title)
+                        .font(ClipFlowTypography.badge)
+                        .foregroundStyle(Color.secondary)
+                        .lineLimit(1)
                 }
 
                 if item.isImage {
@@ -715,16 +778,11 @@ struct HUDRow: View {
                         store: store,
                         item: item,
                         height: 88,
-                        cornerRadius: 12,
+                        cornerRadius: ClipFlowRadius.badge,
                         showsDimensionLabel: false,
                         contentMode: .fit,
                         insetPreview: true
                     )
-                } else {
-                    Text(store.displaySnippet(for: item))
-                        .font(.system(size: item.kind == .code ? 10 : 11, weight: .medium, design: item.kind == .code ? .monospaced : .rounded))
-                        .foregroundStyle(Color.secondary)
-                        .lineLimit(2)
                 }
 
                 HStack(spacing: 5) {
@@ -736,166 +794,26 @@ struct HUDRow: View {
                         Text(item.privacy.label)
                     }
                 }
-                .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(tint)
+                .font(ClipFlowTypography.smallCaptionBold)
+                .foregroundStyle(item.kind.tint)
             }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 9)
         .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(isSelected ? tint.opacity(0.18) : Color.white.opacity(0.50))
+            RoundedRectangle(cornerRadius: ClipFlowRadius.menuRow, style: .continuous)
+                .fill(isSelected
+                    ? item.kind.tint.opacity(0.18)
+                    : Color.white.opacity(isDark ? 0.06 : 0.50))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(isSelected ? tint.opacity(0.42) : Color.white.opacity(0.28), lineWidth: 1)
+            RoundedRectangle(cornerRadius: ClipFlowRadius.menuRow, style: .continuous)
+                .stroke(isSelected
+                    ? item.kind.tint.opacity(0.42)
+                    : Color.white.opacity(isDark ? 0.10 : 0.28), lineWidth: 1)
         )
-    }
-
-    private var tint: Color {
-        switch item.kind {
-        case .text: ClipCategory.all.tint
-        case .code: ClipCategory.code.tint
-        case .link: ClipCategory.links.tint
-        case .secret: ClipCategory.protected.tint
-        case .image: ClipCategory.smartStacks.tint
-        }
-    }
-
-    private var iconName: String {
-        switch item.kind {
-        case .text: "text.alignleft"
-        case .code: "terminal"
-        case .link: "link"
-        case .secret: "lock.fill"
-        case .image: "photo.stack.fill"
-        }
-    }
-}
-
-struct HUDCompactButtonStyle: ButtonStyle {
-    let fill: Color
-    var foreground: Color = Color.primary
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(foreground)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(
-                RoundedRectangle(cornerRadius: 13, style: .continuous)
-                    .fill(fill.opacity(configuration.isPressed ? 0.75 : 1))
-            )
-    }
-}
-
-struct HUDInteractiveRow: NSViewRepresentable {
-    let item: ClipboardItem
-    let store: ClipFlowStore
-    let isSelected: Bool
-    let onSelect: () -> Void
-    let onPaste: () -> Void
-    let onInspect: () -> Void
-
-    func makeNSView(context: Context) -> HUDInteractiveHostingView {
-        let view = HUDInteractiveHostingView()
-        view.update(
-            rootView: AnyView(
-                HUDRow(
-                    item: item,
-                    store: store,
-                    isSelected: isSelected
-                )
-            ),
-            onSelect: onSelect,
-            onPaste: onPaste,
-            onInspect: onInspect
-        )
-        return view
-    }
-
-    func updateNSView(_ nsView: HUDInteractiveHostingView, context: Context) {
-        nsView.update(
-            rootView: AnyView(
-                HUDRow(
-                    item: item,
-                    store: store,
-                    isSelected: isSelected
-                )
-            ),
-            onSelect: onSelect,
-            onPaste: onPaste,
-            onInspect: onInspect
-        )
-    }
-}
-
-final class HUDInteractiveHostingView: NSView {
-    private let hostingView = NSHostingView(rootView: AnyView(EmptyView()))
-    private var onSelect: () -> Void = {}
-    private var onPaste: () -> Void = {}
-    private var onInspect: () -> Void = {}
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-
-        wantsLayer = true
-        layer?.backgroundColor = NSColor.clear.cgColor
-
-        hostingView.translatesAutoresizingMaskIntoConstraints = false
-        hostingView.wantsLayer = true
-        hostingView.layer?.backgroundColor = NSColor.clear.cgColor
-        addSubview(hostingView)
-
-        NSLayoutConstraint.activate([
-            hostingView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            hostingView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            hostingView.topAnchor.constraint(equalTo: topAnchor),
-            hostingView.bottomAnchor.constraint(equalTo: bottomAnchor)
-        ])
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    func update(
-        rootView: AnyView,
-        onSelect: @escaping () -> Void,
-        onPaste: @escaping () -> Void,
-        onInspect: @escaping () -> Void
-    ) {
-        hostingView.rootView = rootView
-        self.onSelect = onSelect
-        self.onPaste = onPaste
-        self.onInspect = onInspect
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        if event.clickCount >= 2 {
-            onPaste()
-        } else {
-            onSelect()
-        }
-    }
-
-    override func rightMouseDown(with event: NSEvent) {
-        onInspect()
-    }
-
-    override func otherMouseDown(with event: NSEvent) {
-        if event.buttonNumber == 2 {
-            onInspect()
-        } else {
-            super.otherMouseDown(with: event)
-        }
-    }
-
-    override func menu(for event: NSEvent) -> NSMenu? {
-        onInspect()
-        return nil
+        .scaleEffect(isSelected ? 0.995 : 1)
+        .animation(ClipFlowMotion.selection, value: isSelected)
     }
 }
 
@@ -904,94 +822,161 @@ struct HUDInspectorOverlay: View {
     @ObservedObject var store: ClipFlowStore
     let onClose: () -> Void
     let onPaste: () -> Void
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var isDark: Bool { colorScheme == .dark }
 
     var body: some View {
-        ZStack {
-            Color.black.opacity(0.16)
-                .ignoresSafeArea()
-                .onTapGesture(perform: onClose)
+        GeometryReader { proxy in
+            let cardWidth = min(304, max(280, proxy.size.width - 24))
 
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(alignment: .top, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(item.title)
-                            .font(.system(size: 18, weight: .bold, design: .rounded))
-                        Text("\(item.sourceApp) · \(item.timeLabel)")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(Color.secondary)
-                    }
+            ZStack {
+                Color.black.opacity(0.16)
+                    .ignoresSafeArea()
+                    .onTapGesture(perform: onClose)
 
-                    Spacer()
+                hudCard(cardWidth: cardWidth, proxyHeight: proxy.size.height)
+                    .padding(ClipFlowSpacing.md)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+    }
 
-                    Button("关闭", action: onClose)
-                        .buttonStyle(ClipButtonStyle(fill: Color.white.opacity(0.68)))
-                }
+    @ViewBuilder
+    private func hudCard(cardWidth: CGFloat, proxyHeight: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: ClipFlowSpacing.md) {
+            hudHeader
 
-                if item.isImage, let imageData = store.imageData(for: item), let image = NSImage(data: imageData) {
-                    Image(nsImage: image)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(maxWidth: .infinity, maxHeight: 180)
-                        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                }
+            hudContent(cardWidth: cardWidth, proxyHeight: proxyHeight)
 
-                ScrollView {
-                    Text(store.displayFullText(for: item))
-                        .font(.system(size: item.kind == .code ? 12 : 13, weight: .medium, design: item.kind == .code ? .monospaced : .rounded))
+            hudActions
+        }
+        .padding(ClipFlowSpacing.cardPadding)
+        .frame(width: cardWidth)
+        .fixedSize(horizontal: false, vertical: true)
+        .background(
+            RoundedRectangle(cornerRadius: ClipFlowRadius.hudPanel, style: .continuous)
+                .fill(.ultraThinMaterial)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: ClipFlowRadius.hudPanel, style: .continuous)
+                .stroke(Color.white.opacity(isDark ? 0.18 : 0.72), lineWidth: 1)
+        )
+        .shadow(color: Color.black.opacity(isDark ? 0.35 : 0.18), radius: 24, x: 0, y: 16)
+    }
+
+    private var hudHeader: some View {
+        HStack(alignment: .top, spacing: ClipFlowSpacing.md) {
+            VStack(alignment: .leading, spacing: ClipFlowSpacing.xs) {
+                Text(item.title)
+                    .font(ClipFlowTypography.overlayTitle)
+                Text("\(item.sourceApp) · \(item.timeLabel)")
+                    .font(ClipFlowTypography.caption)
+                    .foregroundStyle(Color.secondary)
+            }
+
+            Spacer()
+
+            Button("关闭", action: onClose)
+                .buttonStyle(ClipFlowButtonStyle(fill: Color.white.opacity(isDark ? 0.10 : 0.68)))
+        }
+    }
+
+    @ViewBuilder
+    private func hudContent(cardWidth: CGFloat, proxyHeight: CGFloat) -> some View {
+        if item.isImage {
+            let imageHeight = min(196, max(156, proxyHeight * 0.24))
+            VStack(alignment: .leading, spacing: ClipFlowSpacing.md) {
+                ClipThumbnailView(
+                    store: store,
+                    item: item,
+                    height: imageHeight,
+                    cornerRadius: ClipFlowRadius.innerCard,
+                    showsDimensionLabel: false,
+                    contentMode: .fit,
+                    insetPreview: true
+                )
+                FlexiblePillRow(items: item.labels, tint: item.kind.tint)
+            }
+        } else {
+            hudTextContent(cardWidth: cardWidth, proxyHeight: proxyHeight)
+        }
+    }
+
+    @ViewBuilder
+    private func hudTextContent(cardWidth: CGFloat, proxyHeight: CGFloat) -> some View {
+        let textContentMaxHeight = min(220, max(110, proxyHeight * 0.34))
+        let textValue = store.displayFullText(for: item)
+        let textBoxWidth = max(220, cardWidth - 28)
+        let estimatedHeight = estimatedTextBoxHeight(for: textValue, width: textBoxWidth)
+        let shouldScroll = estimatedHeight > textContentMaxHeight
+        let textFont: Font = item.kind == .code ? ClipFlowTypography.captionCode : ClipFlowTypography.body
+
+        VStack(alignment: .leading, spacing: ClipFlowSpacing.md) {
+            if shouldScroll {
+                ScrollView(.vertical, showsIndicators: false) {
+                    Text(textValue)
+                        .font(textFont)
                         .foregroundStyle(Color.primary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .textSelection(.enabled)
                 }
-                .frame(maxHeight: 180)
-                .padding(12)
+                .frame(height: textContentMaxHeight)
+                .padding(10)
                 .background(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .fill(Color.white.opacity(0.68))
+                    RoundedRectangle(cornerRadius: ClipFlowRadius.innerCard, style: .continuous)
+                        .fill(Color.white.opacity(isDark ? 0.06 : 0.68))
                 )
-
-                FlexiblePillRow(items: item.labels, tint: tint)
-
-                HStack(spacing: 10) {
-                    if item.privacy != .standard {
-                        Button(store.isRevealed(item) ? "隐藏内容" : "显示内容") {
-                            store.toggleReveal(item.id)
-                        }
-                        .buttonStyle(ClipButtonStyle(fill: tint.opacity(0.14), foreground: tint))
-                    }
-
-                    if let linkURL = item.primaryURL {
-                        Button("访问链接") {
-                            NSWorkspace.shared.open(linkURL)
-                        }
-                        .buttonStyle(ClipButtonStyle(fill: ClipCategory.links.tint.opacity(0.14), foreground: ClipCategory.links.tint))
-                    }
-
-                    Button("粘贴这项", action: onPaste)
-                        .buttonStyle(ClipButtonStyle(fill: Color(red: 0.30, green: 0.59, blue: 0.92), foreground: .white))
-                }
+            } else {
+                Text(textValue)
+                    .font(textFont)
+                    .foregroundStyle(Color.primary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+                    .padding(10)
+                    .background(
+                        RoundedRectangle(cornerRadius: ClipFlowRadius.innerCard, style: .continuous)
+                            .fill(Color.white.opacity(isDark ? 0.06 : 0.68))
+                    )
             }
-            .padding(16)
-            .frame(maxWidth: 320)
-            .background(
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .fill(.ultraThinMaterial)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .stroke(Color.white.opacity(0.72), lineWidth: 1)
-            )
-            .shadow(color: Color.black.opacity(0.18), radius: 24, x: 0, y: 16)
-            .padding(12)
+            FlexiblePillRow(items: item.labels, tint: item.kind.tint)
         }
     }
 
-    private var tint: Color {
-        switch item.kind {
-        case .text: ClipCategory.all.tint
-        case .code: ClipCategory.code.tint
-        case .link: ClipCategory.links.tint
-        case .secret: ClipCategory.protected.tint
-        case .image: ClipCategory.smartStacks.tint
+    @ViewBuilder
+    private var hudActions: some View {
+        HStack(spacing: 10) {
+            if item.privacy != .standard {
+                Button(store.isRevealed(item) ? "隐藏内容" : "显示内容") {
+                    store.toggleReveal(item.id)
+                }
+                .buttonStyle(ClipFlowButtonStyle(fill: item.kind.tint.opacity(0.14), foreground: item.kind.tint))
+            }
+
+            if let linkURL = item.primaryURL {
+                Button("访问链接") {
+                    NSWorkspace.shared.open(linkURL)
+                }
+                .buttonStyle(ClipFlowButtonStyle(fill: ClipCategory.links.tint.opacity(0.14), foreground: ClipCategory.links.tint))
+            }
+
+            Button("粘贴这项", action: onPaste)
+                .buttonStyle(ClipFlowButtonStyle(fill: Color(red: 0.30, green: 0.59, blue: 0.92), foreground: .white))
         }
+    }
+
+    private func estimatedTextBoxHeight(for text: String, width: CGFloat) -> CGFloat {
+        let font: NSFont = item.kind == .code
+            ? .monospacedSystemFont(ofSize: 12, weight: .medium)
+            : .systemFont(ofSize: 13, weight: .medium)
+
+        let rect = (text as NSString).boundingRect(
+            with: CGSize(width: max(160, width - 20), height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: [.font: font],
+            context: nil
+        )
+
+        return ceil(rect.height) + 20
     }
 }
