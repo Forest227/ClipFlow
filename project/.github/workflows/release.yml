@@ -1,0 +1,79 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: macos-14
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Prepare release metadata
+        shell: zsh
+        run: |
+          set -euo pipefail
+
+          TAG_NAME="${GITHUB_REF_NAME}"
+          NOTES_FILE="docs/releases/${TAG_NAME}.md"
+
+          echo "TAG_NAME=${TAG_NAME}" >> "$GITHUB_ENV"
+          echo "RELEASE_TITLE=ClipFlow ${TAG_NAME}" >> "$GITHUB_ENV"
+
+          if [[ -f "$NOTES_FILE" ]]; then
+            echo "RELEASE_NOTES_FILE=${NOTES_FILE}" >> "$GITHUB_ENV"
+            echo "HAS_CUSTOM_NOTES=true" >> "$GITHUB_ENV"
+          else
+            echo "HAS_CUSTOM_NOTES=false" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build app and DMG
+        shell: zsh
+        run: zsh scripts/build_release_dmg.sh "${TAG_NAME}"
+
+      - name: Ensure GitHub CLI is available
+        shell: zsh
+        run: |
+          set -euo pipefail
+          if ! command -v gh >/dev/null 2>&1; then
+            brew install gh
+          fi
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: zsh
+        run: |
+          set -euo pipefail
+
+          DMG_PATH="dist/release/ClipFlow-${TAG_NAME}.dmg"
+          SHA_PATH="${DMG_PATH}.sha256"
+
+          if gh release view "${TAG_NAME}" >/dev/null 2>&1; then
+            if [[ "${HAS_CUSTOM_NOTES}" == "true" ]]; then
+              gh release edit "${TAG_NAME}" \
+                --title "${RELEASE_TITLE}" \
+                --notes-file "${RELEASE_NOTES_FILE}"
+            fi
+
+            gh release upload "${TAG_NAME}" "${DMG_PATH}" "${SHA_PATH}" --clobber
+          else
+            if [[ "${HAS_CUSTOM_NOTES}" == "true" ]]; then
+              gh release create "${TAG_NAME}" "${DMG_PATH}" "${SHA_PATH}" \
+                --verify-tag \
+                --title "${RELEASE_TITLE}" \
+                --notes-file "${RELEASE_NOTES_FILE}"
+            else
+              gh release create "${TAG_NAME}" "${DMG_PATH}" "${SHA_PATH}" \
+                --verify-tag \
+                --title "${RELEASE_TITLE}" \
+                --generate-notes
+            fi
+          fi
