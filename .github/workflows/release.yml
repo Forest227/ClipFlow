@@ -1,0 +1,99 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: macos-14
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Prepare release metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TAG_NAME="${GITHUB_REF_NAME}"
+          RELEASE_DIR="release/${TAG_NAME}"
+          NOTES_FILE="${RELEASE_DIR}/RELEASE.md"
+          PREBUILT_DMG="${RELEASE_DIR}/ClipFlow-${TAG_NAME}.dmg"
+          PREBUILT_SHA="${PREBUILT_DMG}.sha256"
+
+          echo "TAG_NAME=${TAG_NAME}" >> "$GITHUB_ENV"
+          echo "RELEASE_TITLE=ClipFlow ${TAG_NAME}" >> "$GITHUB_ENV"
+
+          if [[ -f "$NOTES_FILE" ]]; then
+            echo "RELEASE_NOTES_FILE=${NOTES_FILE}" >> "$GITHUB_ENV"
+            echo "HAS_CUSTOM_NOTES=true" >> "$GITHUB_ENV"
+          else
+            echo "HAS_CUSTOM_NOTES=false" >> "$GITHUB_ENV"
+          fi
+
+          if [[ -f "$PREBUILT_DMG" && -f "$PREBUILT_SHA" ]]; then
+            echo "HAS_PREBUILT_ASSETS=true" >> "$GITHUB_ENV"
+            echo "DMG_PATH=${PREBUILT_DMG}" >> "$GITHUB_ENV"
+            echo "SHA_PATH=${PREBUILT_SHA}" >> "$GITHUB_ENV"
+          else
+            echo "HAS_PREBUILT_ASSETS=false" >> "$GITHUB_ENV"
+            echo "DMG_PATH=dist/release/ClipFlow-${TAG_NAME}.dmg" >> "$GITHUB_ENV"
+            echo "SHA_PATH=dist/release/ClipFlow-${TAG_NAME}.dmg.sha256" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build app and DMG
+        if: env.HAS_PREBUILT_ASSETS != 'true'
+        shell: bash
+        run: zsh scripts/build_release_dmg.sh "${TAG_NAME}"
+
+      - name: Use committed release assets
+        if: env.HAS_PREBUILT_ASSETS == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Using prebuilt release assets:"
+          echo "$DMG_PATH"
+          echo "$SHA_PATH"
+
+      - name: Ensure GitHub CLI is available
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v gh >/dev/null 2>&1; then
+            brew install gh
+          fi
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if gh release view "${TAG_NAME}" >/dev/null 2>&1; then
+            if [[ "${HAS_CUSTOM_NOTES}" == "true" ]]; then
+              gh release edit "${TAG_NAME}" \
+                --title "${RELEASE_TITLE}" \
+                --notes-file "${RELEASE_NOTES_FILE}"
+            fi
+
+            gh release upload "${TAG_NAME}" "${DMG_PATH}" "${SHA_PATH}" --clobber
+          else
+            if [[ "${HAS_CUSTOM_NOTES}" == "true" ]]; then
+              gh release create "${TAG_NAME}" "${DMG_PATH}" "${SHA_PATH}" \
+                --verify-tag \
+                --title "${RELEASE_TITLE}" \
+                --notes-file "${RELEASE_NOTES_FILE}"
+            else
+              gh release create "${TAG_NAME}" "${DMG_PATH}" "${SHA_PATH}" \
+                --verify-tag \
+                --title "${RELEASE_TITLE}" \
+                --generate-notes
+            fi
+          fi
