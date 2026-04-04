@@ -54,7 +54,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
   <key>CFBundleExecutable</key>
   <string>ClipFlowApp</string>
   <key>CFBundleDisplayName</key>
-  <string>ClipFlow 剪流</string>
+  <string>ClipFlow</string>
   <key>CFBundleIdentifier</key>
   <string>com.clipflow.app</string>
   <key>CFBundleIconFile</key>

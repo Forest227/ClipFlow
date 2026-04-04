@@ -39,7 +39,7 @@ ClipFlow 的首个公开版本，围绕 macOS 原生工作流提供更轻量、�
 
 当前目录包含以下发布产物：
 
-- `ClipFlow-v0.0.1.app`
+- `ClipFlow.app`
 - `ClipFlow-v0.0.1.dmg`
 - `ClipFlow-v0.0.1.dmg.sha256`
 
