@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 // MARK: - Settings View
@@ -9,6 +10,7 @@ struct SettingsView: View {
 
     var body: some View {
         let palette = ClipFlowPalette.resolve(for: colorScheme)
+        let excludedAppsEditorFill = Color(nsColor: .textBackgroundColor)
 
         ZStack {
             AppBackground(palette: palette)
@@ -62,39 +64,27 @@ struct SettingsView: View {
                                 detail: "选择应用的颜色主题。"
                             )
 
-                            HStack(spacing: 0) {
+                            HStack(spacing: 6) {
                                 ForEach(AppearanceMode.allCases, id: \.rawValue) { mode in
-                                    let isSelected = store.appearanceMode == mode
-                                    Button {
+                                    AppearanceModeSegmentButton(
+                                        mode: mode,
+                                        isSelected: store.appearanceMode == mode,
+                                        palette: palette
+                                    ) {
                                         withAnimation(ClipFlowMotion.selection) {
                                             store.appearanceMode = mode
                                         }
-                                    } label: {
-                                        HStack(spacing: 6) {
-                                            Image(systemName: mode.icon)
-                                                .font(.system(size: 11, weight: .semibold))
-                                            Text(mode.label)
-                                                .font(ClipFlowTypography.captionBold)
-                                        }
-                                        .frame(maxWidth: .infinity)
-                                        .padding(.vertical, 9)
-                                        .background(
-                                            RoundedRectangle(cornerRadius: ClipFlowRadius.badge, style: .continuous)
-                                                .fill(isSelected ? palette.primaryButtonFill.opacity(0.16) : Color.clear)
-                                        )
-                                        .foregroundStyle(isSelected ? palette.primaryButtonFill : Color.secondary)
                                     }
-                                    .buttonStyle(.plain)
                                 }
                             }
-                            .padding(3)
+                            .padding(5)
                             .background(
                                 RoundedRectangle(cornerRadius: ClipFlowRadius.menuButton, style: .continuous)
-                                    .fill(Color.white.opacity(0.05))
+                                    .fill(palette.inputFill.opacity(colorScheme == .dark ? 0.92 : 1))
                             )
                             .overlay(
                                 RoundedRectangle(cornerRadius: ClipFlowRadius.menuButton, style: .continuous)
-                                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                                    .stroke(palette.border.opacity(colorScheme == .dark ? 1 : 0.9), lineWidth: 1)
                             )
                         }
                     }
@@ -232,8 +222,9 @@ struct SettingsView: View {
 
                             TextEditor(text: $excludedAppsText)
                                 .font(.system(size: 13, weight: .medium, design: .monospaced))
+                                .scrollContentBackground(.hidden)
                                 .padding(10)
-                                .background(palette.softFill)
+                                .background(excludedAppsEditorFill)
                                 .clipShape(RoundedRectangle(cornerRadius: ClipFlowRadius.innerCard, style: .continuous))
                                 .frame(height: 176)
 
@@ -328,6 +319,76 @@ struct SettingsSectionTitle: View {
                 .font(ClipFlowTypography.smallCaption)
                 .foregroundStyle(Color.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+struct AppearanceModeSegmentButton: View {
+    let mode: AppearanceMode
+    let isSelected: Bool
+    let palette: ClipFlowPalette
+    let action: () -> Void
+
+    @State private var isHovered = false
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var tint: Color {
+        isSelected ? .white.opacity(colorScheme == .dark ? 0.96 : 0.98) : Color.primary.opacity(colorScheme == .dark ? 0.84 : 0.72)
+    }
+
+    private var backgroundFill: Color {
+        if isSelected {
+            return palette.primaryButtonFill.opacity(colorScheme == .dark ? 0.34 : 0.24)
+        }
+
+        return isHovered
+            ? Color.white.opacity(colorScheme == .dark ? 0.08 : 0.55)
+            : Color.white.opacity(colorScheme == .dark ? 0.03 : 0.36)
+    }
+
+    private var borderColor: Color {
+        if isSelected {
+            return palette.primaryButtonFill.opacity(colorScheme == .dark ? 0.32 : 0.24)
+        }
+
+        return palette.border.opacity(colorScheme == .dark ? 0.55 : 0.65)
+    }
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: mode.icon)
+                    .font(.system(size: 13, weight: .bold))
+                    .frame(width: 18, height: 18)
+
+                Text(mode.label)
+                    .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, minHeight: 52)
+            .contentShape(RoundedRectangle(cornerRadius: ClipFlowRadius.badge, style: .continuous))
+            .background(
+                RoundedRectangle(cornerRadius: ClipFlowRadius.badge, style: .continuous)
+                    .fill(backgroundFill)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: ClipFlowRadius.badge, style: .continuous)
+                    .stroke(borderColor, lineWidth: 1)
+            )
+            .foregroundStyle(tint)
+            .shadow(
+                color: isSelected ? palette.primaryButtonFill.opacity(colorScheme == .dark ? 0.18 : 0.10) : .clear,
+                radius: isSelected ? 10 : 0,
+                x: 0,
+                y: isSelected ? 5 : 0
+            )
+        }
+        .buttonStyle(.plain)
+        .contentShape(RoundedRectangle(cornerRadius: ClipFlowRadius.badge, style: .continuous))
+        .onHover { hovering in
+            withAnimation(ClipFlowMotion.fade) {
+                isHovered = hovering
+            }
         }
     }
 }
