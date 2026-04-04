@@ -14,7 +14,10 @@ ICNS_PATH="$APP_DIR/Contents/Resources/$ICON_NAME.icns"
 APP_VERSION="${CLIPFLOW_VERSION:-0.1.0}"
 BUILD_NUMBER="${CLIPFLOW_BUILD_NUMBER:-1}"
 
-swift "$ROOT_DIR/scripts/render_icon.swift" "$ICON_PNG"
+if [[ ! -f "$ICON_PNG" ]]; then
+  echo "Icon source not found at $ICON_PNG" >&2
+  exit 1
+fi
 
 swift build -c release --product "$PRODUCT_NAME"
 BIN_DIR="$(swift build -c release --show-bin-path)"
