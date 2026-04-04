@@ -172,6 +172,58 @@ struct SettingsView: View {
                     }
 
                     FrostedPanel(palette: palette) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            SettingsSectionTitle(
+                                title: "快捷键",
+                                detail: "自定义各功能的全局快捷键。点击录制区域后按下新的组合键即可更改。"
+                            )
+
+                            VStack(spacing: 0) {
+                                HotKeyRow(
+                                    icon: "cursorarrow.rays",
+                                    tint: ClipCategory.quickPaste.tint,
+                                    title: "呼出快速粘贴面板",
+                                    config: $store.hotKeyQuickPaste,
+                                    defaultConfig: .quickPasteDefault,
+                                    showsDivider: true
+                                )
+                                HotKeyRow(
+                                    icon: "menubar.rectangle",
+                                    tint: ClipCategory.all.tint,
+                                    title: "呼出状态栏菜单",
+                                    config: $store.hotKeyStatusBar,
+                                    defaultConfig: .statusBarDefault,
+                                    showsDivider: true
+                                )
+                                HotKeyRow(
+                                    icon: "rectangle.on.rectangle",
+                                    tint: ClipCategory.links.tint,
+                                    title: "打开主窗口",
+                                    config: $store.hotKeyLibrary,
+                                    defaultConfig: .libraryDefault,
+                                    showsDivider: true
+                                )
+                                HotKeyRow(
+                                    icon: "gearshape",
+                                    tint: ClipCategory.smartStacks.tint,
+                                    title: "打开设置",
+                                    config: $store.hotKeySettings,
+                                    defaultConfig: .settingsDefault,
+                                    showsDivider: false
+                                )
+                            }
+                            .background(
+                                RoundedRectangle(cornerRadius: ClipFlowRadius.innerCard, style: .continuous)
+                                    .fill(Color.white.opacity(0.05))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: ClipFlowRadius.innerCard, style: .continuous)
+                                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                            )
+                        }
+                    }
+
+                    FrostedPanel(palette: palette) {
                         VStack(alignment: .leading, spacing: ClipFlowSpacing.md) {
                             SettingsSectionTitle(
                                 title: "排除应用 Bundle ID",
@@ -181,14 +233,8 @@ struct SettingsView: View {
                             TextEditor(text: $excludedAppsText)
                                 .font(.system(size: 13, weight: .medium, design: .monospaced))
                                 .padding(10)
-                                .background(
-                                    RoundedRectangle(cornerRadius: ClipFlowRadius.innerCard, style: .continuous)
-                                        .fill(Color.black.opacity(colorScheme == .dark ? 0.22 : 0.08))
-                                )
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: ClipFlowRadius.innerCard, style: .continuous)
-                                        .stroke(palette.border.opacity(0.7), lineWidth: 1)
-                                )
+                                .background(palette.softFill)
+                                .clipShape(RoundedRectangle(cornerRadius: ClipFlowRadius.innerCard, style: .continuous))
                                 .frame(height: 176)
 
                             HStack(spacing: 10) {
@@ -333,5 +379,168 @@ struct SettingsToggleCard: View {
                     .padding(.leading, 48)
             }
         }
+    }
+}
+
+// MARK: - HotKey Row
+
+struct HotKeyRow: View {
+    let icon: String
+    let tint: Color
+    let title: String
+    @Binding var config: HotKeyConfig
+    let defaultConfig: HotKeyConfig
+    var showsDivider = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .center, spacing: 10) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: ClipFlowRadius.menuButton, style: .continuous)
+                        .fill(tint.opacity(0.14))
+                        .frame(width: 28, height: 28)
+                    Image(systemName: icon)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(tint)
+                }
+
+                Text(title)
+                    .font(ClipFlowTypography.bodyBold)
+
+                Spacer(minLength: 6)
+
+                HStack(spacing: 6) {
+                    HotKeyRecorderField(config: $config)
+                        .frame(width: 72, height: 26)
+
+                    Button {
+                        config = defaultConfig
+                    } label: {
+                        Image(systemName: "arrow.counterclockwise")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(Color.secondary)
+                            .frame(width: 22, height: 22)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .fill(Color.white.opacity(0.07))
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .help("恢复默认")
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, ClipFlowSpacing.sm)
+
+            if showsDivider {
+                Divider()
+                    .overlay(Color.white.opacity(0.08))
+                    .padding(.leading, 48)
+            }
+        }
+    }
+}
+
+// MARK: - HotKey Recorder Field
+
+struct HotKeyRecorderField: NSViewRepresentable {
+    @Binding var config: HotKeyConfig
+
+    func makeNSView(context: Context) -> HotKeyRecorderNSView {
+        let view = HotKeyRecorderNSView()
+        view.onConfigChanged = { newConfig in
+            config = newConfig
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: HotKeyRecorderNSView, context: Context) {
+        nsView.currentConfig = config
+    }
+}
+
+final class HotKeyRecorderNSView: NSView {
+    var currentConfig: HotKeyConfig = .quickPasteDefault {
+        didSet { updateLabel() }
+    }
+    var onConfigChanged: ((HotKeyConfig) -> Void)?
+
+    private let label = NSTextField(labelWithString: "")
+    private var isRecording = false
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        setup()
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    private func setup() {
+        wantsLayer = true
+        layer?.cornerRadius = 6
+        layer?.cornerCurve = .continuous
+
+        label.font = .systemFont(ofSize: 12, weight: .medium)
+        label.alignment = .center
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
+        NSLayoutConstraint.activate([
+            label.centerXAnchor.constraint(equalTo: centerXAnchor),
+            label.centerYAnchor.constraint(equalTo: centerYAnchor),
+            widthAnchor.constraint(greaterThanOrEqualToConstant: 80),
+            heightAnchor.constraint(equalToConstant: 26)
+        ])
+        updateLabel()
+    }
+
+    private func updateLabel() {
+        if isRecording {
+            label.stringValue = "录制中…"
+            label.textColor = NSColor.controlAccentColor
+            layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.12).cgColor
+            layer?.borderColor = NSColor.controlAccentColor.withAlphaComponent(0.6).cgColor
+            layer?.borderWidth = 1
+        } else {
+            label.stringValue = currentConfig.displayString
+            label.textColor = NSColor.labelColor
+            layer?.backgroundColor = NSColor.white.withAlphaComponent(0.07).cgColor
+            layer?.borderColor = NSColor.white.withAlphaComponent(0.12).cgColor
+            layer?.borderWidth = 1
+        }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        isRecording = true
+        updateLabel()
+        window?.makeFirstResponder(self)
+    }
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func keyDown(with event: NSEvent) {
+        guard isRecording else { super.keyDown(with: event); return }
+
+        let flags = event.modifierFlags.intersection([.command, .option, .shift, .control])
+        guard !flags.isEmpty else { return }
+
+        var carbonMods: UInt32 = 0
+        if flags.contains(.command) { carbonMods |= 256 }
+        if flags.contains(.option)  { carbonMods |= 2048 }
+        if flags.contains(.shift)   { carbonMods |= 512 }
+        if flags.contains(.control) { carbonMods |= 4096 }
+
+        let newConfig = HotKeyConfig(keyCode: UInt32(event.keyCode), modifiers: carbonMods)
+        isRecording = false
+        currentConfig = newConfig
+        onConfigChanged?(newConfig)
+        window?.makeFirstResponder(nil)
+    }
+
+    override func resignFirstResponder() -> Bool {
+        if isRecording {
+            isRecording = false
+            updateLabel()
+        }
+        return super.resignFirstResponder()
     }
 }

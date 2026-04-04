@@ -66,7 +66,7 @@ struct MenuBarView: View {
 
                 HStack(spacing: ClipFlowSpacing.sm) {
                     Button {
-                        AppNavigationCenter.shared.openLibrary()
+                        AppNavigationCenter.shared.openLibraryKeepingPopover?()
                     } label: {
                         MenuCompactActionLabel(
                             title: "主窗口",
@@ -111,7 +111,7 @@ struct MenuBarView: View {
                     )
 
                     Button {
-                        AppNavigationCenter.shared.openSettings()
+                        AppNavigationCenter.shared.openSettingsKeepingPopover?()
                     } label: {
                         MenuCompactActionLabel(
                             title: "设置",
@@ -227,7 +227,7 @@ struct MenuPanelHeader: View {
             HStack(spacing: ClipFlowSpacing.sm) {
                 MenuStatPill(title: "历史", value: "\(store.items.count)", icon: "square.3.layers.3d.top.filled", tint: ClipCategory.all.tint)
                 MenuStatPill(title: "隐私", value: "\(store.protectedCount)", icon: "lock.shield.fill", tint: ClipCategory.protected.tint)
-                MenuStatPill(title: "呼出", value: "⌥V", icon: "cursorarrow.rays", tint: ClipCategory.quickPaste.tint)
+                MenuStatPill(title: "呼出", value: store.quickPasteShortcutSymbol, icon: "cursorarrow.rays", tint: ClipCategory.quickPaste.tint)
             }
         }
         .padding(ClipFlowSpacing.cardPadding)

@@ -1,3 +1,4 @@
+import AppKit
 import ApplicationServices
 import CryptoKit
 import Foundation
@@ -767,6 +768,59 @@ enum AppearanceMode: Int, CaseIterable, Codable {
         case .dark: .dark
         }
     }
+
+    var nsAppearance: NSAppearance? {
+        switch self {
+        case .system:
+            return nil
+        case .light:
+            return NSAppearance(named: .aqua)
+        case .dark:
+            return NSAppearance(named: .darkAqua)
+        }
+    }
+}
+
+// MARK: - HotKey Configuration
+
+struct HotKeyConfig: Codable, Equatable {
+    var keyCode: UInt32
+    var modifiers: UInt32
+
+    // Carbon modifier constants
+    private static let optMod:  UInt32 = 2048  // optionKey
+    private static let shiftMod: UInt32 = 512  // shiftKey
+    private static let cmdMod:  UInt32 = 256   // cmdKey
+    private static let ctrlMod: UInt32 = 4096  // controlKey
+
+    static let quickPasteDefault = HotKeyConfig(keyCode: 9,  modifiers: optMod)                   // ⌥V
+    static let statusBarDefault  = HotKeyConfig(keyCode: 9,  modifiers: optMod | shiftMod)        // ⌥⇧V
+    static let libraryDefault    = HotKeyConfig(keyCode: 9,  modifiers: optMod | cmdMod)           // ⌥⌘V
+    static let settingsDefault   = HotKeyConfig(keyCode: 44, modifiers: optMod | cmdMod)           // ⌥⌘,
+
+    var displayString: String {
+        var parts: [String] = []
+        if modifiers & Self.ctrlMod  != 0 { parts.append("⌃") }
+        if modifiers & Self.optMod   != 0 { parts.append("⌥") }
+        if modifiers & Self.shiftMod != 0 { parts.append("⇧") }
+        if modifiers & Self.cmdMod   != 0 { parts.append("⌘") }
+        parts.append(Self.keyCodeLabel(keyCode))
+        return parts.joined()
+    }
+
+    private static func keyCodeLabel(_ code: UInt32) -> String {
+        let map: [UInt32: String] = [
+            0:"A",1:"S",2:"D",3:"F",4:"H",5:"G",6:"Z",7:"X",8:"C",9:"V",
+            11:"B",12:"Q",13:"W",14:"E",15:"R",16:"Y",17:"T",31:"O",32:"U",
+            34:"I",35:"P",37:"L",38:"J",40:"K",45:"N",46:"M",
+            44:",",47:".",43:";",41:"'",42:"\\",50:"`",
+            18:"1",19:"2",20:"3",21:"4",22:"6",23:"5",24:"=",25:"9",26:"7",
+            27:"-",28:"8",29:"0",
+            36:"↩",48:"⇥",49:"Space",51:"⌫",53:"Esc",
+            123:"←",124:"→",125:"↓",126:"↑"
+        ]
+        return map[code] ?? "(\(code))"
+    }
 }
 
 @MainActor
@@ -799,6 +853,18 @@ final class ClipFlowStore: ObservableObject {
     @Published var iCloudSyncEnabled: Bool
     @Published var excludedBundleIDs: [String] {
         didSet { defaults.set(excludedBundleIDs, forKey: Keys.excludedBundleIDs) }
+    }
+    @Published var hotKeyQuickPaste: HotKeyConfig {
+        didSet { saveHotKey(hotKeyQuickPaste, forKey: Keys.hotKeyQuickPaste) }
+    }
+    @Published var hotKeyStatusBar: HotKeyConfig {
+        didSet { saveHotKey(hotKeyStatusBar, forKey: Keys.hotKeyStatusBar) }
+    }
+    @Published var hotKeyLibrary: HotKeyConfig {
+        didSet { saveHotKey(hotKeyLibrary, forKey: Keys.hotKeyLibrary) }
+    }
+    @Published var hotKeySettings: HotKeyConfig {
+        didSet { saveHotKey(hotKeySettings, forKey: Keys.hotKeySettings) }
     }
     @Published var revealedItemIDs: Set<UUID> = []
     @Published var lastCaptureStatus: String = "准备就绪"
@@ -853,6 +919,10 @@ final class ClipFlowStore: ObservableObject {
         menuQuickPasteModeEnabled = defaults.object(forKey: Keys.menuQuickPasteModeEnabled) as? Bool ?? true
         iCloudSyncEnabled = defaults.object(forKey: Keys.iCloudSyncEnabled) as? Bool ?? false
         excludedBundleIDs = defaults.stringArray(forKey: Keys.excludedBundleIDs) ?? Self.defaultExcludedBundleIDs
+        hotKeyQuickPaste = Self.loadHotKey(forKey: Keys.hotKeyQuickPaste, default: .quickPasteDefault)
+        hotKeyStatusBar  = Self.loadHotKey(forKey: Keys.hotKeyStatusBar,  default: .statusBarDefault)
+        hotKeyLibrary    = Self.loadHotKey(forKey: Keys.hotKeyLibrary,    default: .libraryDefault)
+        hotKeySettings   = Self.loadHotKey(forKey: Keys.hotKeySettings,   default: .settingsDefault)
         iCloudLastSyncedAt = defaults.object(forKey: Keys.iCloudLastSyncedAt) as? Date
         localSyncTombstones = Self.decodeTombstones(from: defaults.data(forKey: Keys.iCloudSyncTombstones))
         items = loadItems()
@@ -866,6 +936,9 @@ final class ClipFlowStore: ObservableObject {
             }
         }
     }
+
+    var quickPasteShortcutSymbol: String { hotKeyQuickPaste.displayString }
+    var quickPasteShortcutReadable: String { hotKeyQuickPaste.displayString }
 
     var filteredItems: [ClipboardItem] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -1609,6 +1682,10 @@ final class ClipFlowStore: ObservableObject {
         static let iCloudSyncTombstones = "iCloudSyncTombstones"
         static let excludedBundleIDs = "excludedBundleIDs"
         static let appearanceMode = "appearanceMode"
+        static let hotKeyQuickPaste = "hotKeyQuickPaste"
+        static let hotKeyStatusBar = "hotKeyStatusBar"
+        static let hotKeyLibrary = "hotKeyLibrary"
+        static let hotKeySettings = "hotKeySettings"
     }
 
     private static let defaultExcludedBundleIDs: [String] = [
@@ -1618,6 +1695,20 @@ final class ClipFlowStore: ObservableObject {
         "com.1password.1password",
         "com.bitwarden.desktop"
     ]
+
+    private static func loadHotKey(forKey key: String, default fallback: HotKeyConfig) -> HotKeyConfig {
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let config = try? JSONDecoder().decode(HotKeyConfig.self, from: data) else {
+            return fallback
+        }
+        return config
+    }
+
+    private func saveHotKey(_ config: HotKeyConfig, forKey key: String) {
+        if let data = try? JSONEncoder().encode(config) {
+            defaults.set(data, forKey: key)
+        }
+    }
 
     private static func currentLaunchAtLoginState() -> Bool {
         switch SMAppService.mainApp.status {

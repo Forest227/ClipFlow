@@ -247,7 +247,7 @@ struct HeaderView: View {
             )
             HeaderOverviewCard(
                 title: "快捷呼出",
-                value: "⌥V",
+                value: store.quickPasteShortcutSymbol,
                 detail: "指针附近快速回贴",
                 icon: "cursorarrow.click.2",
                 tint: ClipCategory.quickPaste.tint
@@ -433,7 +433,7 @@ struct EmptyLibraryView: View {
                     Text("从复制开始，建立你的剪贴工作流")
                         .font(ClipFlowTypography.sectionTitle)
 
-                    Text("去任意应用复制文字或图片，ClipFlow 会自动记录和分类。需要回贴时，按下 Option + V，就能在指针附近快速调出内容。")
+                    Text("去任意应用复制文字或图片，ClipFlow 会自动记录和分类。需要回贴时，按下 \(store.quickPasteShortcutReadable)，就能在指针附近快速调出内容。")
                         .font(ClipFlowTypography.body)
                         .foregroundStyle(Color.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -445,7 +445,7 @@ struct EmptyLibraryView: View {
                     EmptyStateBadge(
                         icon: "cursorarrow.click.2",
                         title: "快捷呼出",
-                        detail: "Option + V"
+                        detail: store.quickPasteShortcutReadable
                     )
                     EmptyStateBadge(
                         icon: "lock.shield",
@@ -481,7 +481,7 @@ struct EmptyLibraryView: View {
                     .font(ClipFlowTypography.cardTitle)
 
                 StepRow(index: "1", text: "先去其他应用复制一段文字或图片")
-                StepRow(index: "2", text: "按下 Option + V 打开指针附近的快捷面板")
+                StepRow(index: "2", text: "按下 \(store.quickPasteShortcutReadable) 打开指针附近的快捷面板")
                 StepRow(index: "3", text: "选择内容后直接粘贴，或回到这里继续整理")
             }
 

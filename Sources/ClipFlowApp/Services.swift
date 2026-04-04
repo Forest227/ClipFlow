@@ -1,5 +1,6 @@
 import AppKit
 import Carbon
+import Combine
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -42,9 +43,8 @@ final class ClipFlowRuntime: NSObject {
     } onOpenLibrary: { [weak self] in
         self?.openLibrary()
     }
-    private lazy var hotKeyController = HotKeyController { [weak self] in
-        self?.toggleHUD()
-    }
+    private let hotKeyController = HotKeyController()
+    private var cancellables = Set<AnyCancellable>()
 
     private var appActivationObserver: NSObjectProtocol?
     private var started = false
@@ -63,9 +63,32 @@ final class ClipFlowRuntime: NSObject {
 
         observeFrontmostApp()
         clipboardMonitor.start()
-        hotKeyController.start()
+        registerHotKeys()
+        observeHotKeyChanges()
         store.purgeExpired()
         store.lastCaptureStatus = store.capturePaused ? "已暂停剪贴监听" : "正在监听系统剪贴板"
+    }
+
+    private func registerHotKeys() {
+        hotKeyController.start(configs: [
+            .init(id: 1, config: store.hotKeyQuickPaste, action: { [weak self] in self?.toggleHUD() }),
+            .init(id: 2, config: store.hotKeyStatusBar,  action: { [weak self] in self?.toggleStatusBarMenu() }),
+            .init(id: 3, config: store.hotKeyLibrary,    action: { [weak self] in self?.openLibrary() }),
+            .init(id: 4, config: store.hotKeySettings,   action: { [weak self] in self?.openSettings() })
+        ])
+    }
+
+    private func observeHotKeyChanges() {
+        Publishers.MergeMany(
+            store.$hotKeyQuickPaste.map { _ in () },
+            store.$hotKeyStatusBar.map  { _ in () },
+            store.$hotKeyLibrary.map    { _ in () },
+            store.$hotKeySettings.map   { _ in () }
+        )
+        .dropFirst(4)
+        .debounce(for: .milliseconds(200), scheduler: RunLoop.main)
+        .sink { [weak self] in self?.registerHotKeys() }
+        .store(in: &cancellables)
     }
 
     func toggleHUD() {
@@ -78,6 +101,10 @@ final class ClipFlowRuntime: NSObject {
 
     func hideHUD() {
         hudController.hide()
+    }
+
+    func applyAppearance(_ appearance: NSAppearance?) {
+        hudController.applyAppearance(appearance)
     }
 
     func paste(_ item: ClipboardItem) {
@@ -105,15 +132,27 @@ final class ClipFlowRuntime: NSObject {
         }
     }
 
+    func toggleStatusBarMenu() {
+        AppNavigationCenter.shared.toggleStatusBarMenu?()
+    }
+
+    func openSettings() {
+        hudController.hide()
+        AppNavigationCenter.shared.openSettingsWindow?()
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
     func restartApplication() {
-        guard let appURL = relaunchBundleURL() else {
-            store.lastCaptureStatus = "无法定位应用包，暂时不能重启"
-            return
-        }
+        let execURL = Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0])
+        let appURL = relaunchBundleURL()
 
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        process.arguments = ["-n", appURL.path]
+        if let appURL {
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+            process.arguments = ["-n", appURL.path]
+        } else {
+            process.executableURL = execURL
+        }
 
         do {
             try process.run()
@@ -340,17 +379,20 @@ final class PasteService {
 }
 
 final class HotKeyController {
-    private let action: @MainActor () -> Void
-    private let hotKeySignature: OSType = 0x434C4657
-    private var hotKeyRef: EventHotKeyRef?
-    private var eventHandler: EventHandlerRef?
-
-    init(action: @escaping @MainActor () -> Void) {
-        self.action = action
+    struct Entry {
+        let id: UInt32
+        let config: HotKeyConfig
+        let action: @MainActor @Sendable () -> Void
     }
 
-    func start() {
-        guard hotKeyRef == nil else { return }
+    private let hotKeySignature: OSType = 0x434C4657
+    private var registrations: [(ref: EventHotKeyRef, id: UInt32)] = []
+    private var eventHandler: EventHandlerRef?
+    private var actions: [UInt32: @MainActor @Sendable () -> Void] = [:]
+
+    // id mapping: 1=quickPaste, 2=statusBar, 3=library, 4=settings
+    func start(configs: [Entry]) {
+        stop()
 
         var eventSpec = EventTypeSpec(
             eventClass: OSType(kEventClassKeyboard),
@@ -358,61 +400,53 @@ final class HotKeyController {
         )
 
         let userData = Unmanaged.passUnretained(self).toOpaque()
-
         let handler: EventHandlerUPP = { _, eventRef, userData in
             guard let eventRef, let userData else { return noErr }
-
             let controller = Unmanaged<HotKeyController>.fromOpaque(userData).takeUnretainedValue()
             var hotKeyID = EventHotKeyID()
             let status = GetEventParameter(
                 eventRef,
                 EventParamName(kEventParamDirectObject),
                 EventParamType(typeEventHotKeyID),
-                nil,
-                MemoryLayout<EventHotKeyID>.size,
-                nil,
+                nil, MemoryLayout<EventHotKeyID>.size, nil,
                 &hotKeyID
             )
-
-            if status == noErr, hotKeyID.signature == controller.hotKeySignature {
-                let action = controller.action
-                Task { @MainActor in
-                    action()
-                }
+            if status == noErr, hotKeyID.signature == controller.hotKeySignature,
+               let action = controller.actions[hotKeyID.id] {
+                Task { @MainActor in action() }
             }
-
             return noErr
         }
 
-        InstallEventHandler(
-            GetApplicationEventTarget(),
-            handler,
-            1,
-            &eventSpec,
-            userData,
-            &eventHandler
-        )
+        InstallEventHandler(GetApplicationEventTarget(), handler, 1, &eventSpec, userData, &eventHandler)
 
-        let hotKeyID = EventHotKeyID(signature: hotKeySignature, id: 1)
-        RegisterEventHotKey(
-            UInt32(kVK_ANSI_V),
-            UInt32(optionKey),
-            hotKeyID,
-            GetApplicationEventTarget(),
-            0,
-            &hotKeyRef
-        )
+        for entry in configs {
+            actions[entry.id] = entry.action
+            let hkID = EventHotKeyID(signature: hotKeySignature, id: entry.id)
+            var ref: EventHotKeyRef?
+            RegisterEventHotKey(
+                entry.config.keyCode,
+                entry.config.modifiers,
+                hkID,
+                GetApplicationEventTarget(),
+                0,
+                &ref
+            )
+            if let ref { registrations.append((ref: ref, id: entry.id)) }
+        }
     }
 
-    deinit {
-        if let hotKeyRef {
-            UnregisterEventHotKey(hotKeyRef)
-        }
-
+    func stop() {
+        for reg in registrations { UnregisterEventHotKey(reg.ref) }
+        registrations.removeAll()
+        actions.removeAll()
         if let eventHandler {
             RemoveEventHandler(eventHandler)
+            self.eventHandler = nil
         }
     }
+
+    deinit { stop() }
 }
 
 @MainActor
@@ -438,6 +472,7 @@ final class QuickPastePanelController: NSObject, NSWindowDelegate {
 
     func show(anchorAt mouseLocation: CGPoint, preferredTarget: NSRunningApplication?) {
         let panel = makePanel()
+        panel.appearance = store.appearanceMode.nsAppearance
         panel.contentView = NSHostingView(
             rootView: QuickPastePanelView(
                 store: store,
@@ -497,6 +532,12 @@ final class QuickPastePanelController: NSObject, NSWindowDelegate {
     func windowDidResignKey(_ notification: Notification) {
         guard notification.object as? QuickPastePanel === panel else { return }
         hide()
+    }
+
+    func applyAppearance(_ appearance: NSAppearance?) {
+        panel?.appearance = appearance
+        panel?.contentView?.needsDisplay = true
+        panel?.displayIfNeeded()
     }
 
     private func configurePanelMask(_ panel: QuickPastePanel) {
@@ -718,11 +759,11 @@ struct QuickPastePanelView: View {
         .clipShape(RoundedRectangle(cornerRadius: QuickPastePanelLayout.cornerRadius, style: .continuous))
         .background(
             RoundedRectangle(cornerRadius: QuickPastePanelLayout.cornerRadius, style: .continuous)
-                .fill(.ultraThinMaterial)
+                .fill(isDark ? Color(red: 0.11, green: 0.12, blue: 0.16) : Color(red: 1.0, green: 1.0, blue: 1.0))
         )
         .overlay(
             RoundedRectangle(cornerRadius: QuickPastePanelLayout.cornerRadius, style: .continuous)
-                .stroke(isDark ? Color.white.opacity(0.18) : Color.white.opacity(0.72), lineWidth: 1)
+                .stroke(isDark ? Color.white.opacity(0.10) : Color.black.opacity(0.08), lineWidth: 1)
         )
         .shadow(color: Color.black.opacity(isDark ? 0.35 : 0.15), radius: 24, x: 0, y: 18)
     }
@@ -856,11 +897,11 @@ struct HUDInspectorOverlay: View {
         .fixedSize(horizontal: false, vertical: true)
         .background(
             RoundedRectangle(cornerRadius: ClipFlowRadius.hudPanel, style: .continuous)
-                .fill(.ultraThinMaterial)
+                .fill(isDark ? Color(red: 0.11, green: 0.12, blue: 0.16) : Color(red: 0.97, green: 0.97, blue: 0.98))
         )
         .overlay(
             RoundedRectangle(cornerRadius: ClipFlowRadius.hudPanel, style: .continuous)
-                .stroke(Color.white.opacity(isDark ? 0.18 : 0.72), lineWidth: 1)
+                .stroke(isDark ? Color.white.opacity(0.10) : Color.black.opacity(0.08), lineWidth: 1)
         )
         .shadow(color: Color.black.opacity(isDark ? 0.35 : 0.18), radius: 24, x: 0, y: 16)
     }

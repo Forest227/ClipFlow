@@ -9,6 +9,9 @@ final class AppNavigationCenter {
 
     var openLibraryWindow: (() -> Void)?
     var openSettingsWindow: (() -> Void)?
+    var toggleStatusBarMenu: (() -> Void)?
+    var openLibraryKeepingPopover: (() -> Void)?
+    var openSettingsKeepingPopover: (() -> Void)?
 
     private init() {}
 
@@ -48,6 +51,15 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
         configureStatusItem()
         configurePopover()
         bindStore()
+        AppNavigationCenter.shared.toggleStatusBarMenu = { [weak self] in
+            self?.togglePopoverViaHotKey()
+        }
+        AppNavigationCenter.shared.openLibraryKeepingPopover = { [weak self] in
+            (self as StatusBarController?)?.openLibraryKeepingPopover()
+        }
+        AppNavigationCenter.shared.openSettingsKeepingPopover = { [weak self] in
+            (self as StatusBarController?)?.openSettingsKeepingPopover()
+        }
     }
 
     private func configureStatusItem() {
@@ -55,7 +67,7 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
 
         button.target = self
         button.action = #selector(togglePopover(_:))
-        button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+        button.sendAction(on: [.leftMouseDown, .rightMouseUp])
         button.imagePosition = .imageOnly
         button.imageScaling = .scaleProportionallyDown
         button.appearsDisabled = false
@@ -64,7 +76,7 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
 
     private func configurePopover() {
         popover.behavior = .applicationDefined
-        popover.animates = true
+        popover.animates = false
         popover.delegate = self
         popover.contentSize = NSSize(width: 348, height: 620)
         popover.contentViewController = NSHostingController(
@@ -87,17 +99,58 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
         button.image = ClipFlowStatusBarIcon.make(paused: store.capturePaused)
     }
 
+    func applyAppearance(_ appearance: NSAppearance?) {
+        popover.appearance = appearance
+        popover.contentViewController?.view.window?.appearance = appearance
+        popover.contentViewController?.view.needsDisplay = true
+        popover.contentViewController?.view.window?.displayIfNeeded()
+    }
+
     @objc
     private func togglePopover(_ sender: NSStatusBarButton) {
         if popover.isShown {
             popover.performClose(sender)
         } else {
+            sender.isHighlighted = true
             popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
             startPopoverEventMonitors()
         }
     }
 
+    func togglePopoverViaHotKey() {
+        guard let button = statusItem.button else { return }
+        if popover.isShown {
+            popover.performClose(nil)
+        } else {
+            button.isHighlighted = true
+            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            startPopoverEventMonitors()
+        }
+    }
+
+    func openLibraryKeepingPopover() {
+        stopPopoverEventMonitors()
+        AppNavigationCenter.shared.openLibraryWindow?()
+        NSApp.activate(ignoringOtherApps: true)
+        NSApp.windows.first(where: { !($0 is NSPanel) })?.makeKeyAndOrderFront(nil)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self, self.popover.isShown else { return }
+            self.startPopoverEventMonitors()
+        }
+    }
+
+    func openSettingsKeepingPopover() {
+        stopPopoverEventMonitors()
+        AppNavigationCenter.shared.openSettingsWindow?()
+        NSApp.activate(ignoringOtherApps: true)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self, self.popover.isShown else { return }
+            self.startPopoverEventMonitors()
+        }
+    }
+
     func popoverDidClose(_ notification: Notification) {
+        statusItem.button?.isHighlighted = false
         stopPopoverEventMonitors()
     }
 
@@ -159,10 +212,17 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
 private struct PopoverRoot: View {
     @ObservedObject var store: ClipFlowStore
 
+    private var bgColor: Color {
+        store.appearanceMode == .light
+            ? Color(red: 0.94, green: 0.94, blue: 0.95)
+            : Color(red: 0.11, green: 0.12, blue: 0.16)
+    }
+
     var body: some View {
         MenuBarView(store: store)
             .frame(width: 320)
-            .preferredColorScheme(store.appearanceMode.preferredColorScheme)
+            .preferredColorScheme(store.appearanceMode == .light ? .light : .dark)
+            .background(bgColor)
     }
 }
 
@@ -180,7 +240,7 @@ private enum ClipFlowStatusBarIcon {
 
         context.setAllowsAntialiasing(true)
         context.setShouldAntialias(true)
-        context.setFillColor(NSColor.black.cgColor)
+        context.setFillColor(NSColor.white.cgColor)
 
         if let path = makeCPath(in: CGRect(origin: .zero, size: size), paused: paused) {
             context.addPath(path)
@@ -192,7 +252,7 @@ private enum ClipFlowStatusBarIcon {
         }
 
         image.unlockFocus()
-        image.isTemplate = true
+        image.isTemplate = false
         image.size = size
         return image
     }

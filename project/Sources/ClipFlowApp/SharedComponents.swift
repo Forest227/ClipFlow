@@ -7,26 +7,7 @@ struct AppBackground: View {
     let palette: ClipFlowPalette
 
     var body: some View {
-        ZStack {
-            LinearGradient(
-                colors: [palette.backgroundStart, palette.backgroundMiddle, palette.backgroundEnd],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            .ignoresSafeArea()
-
-            Circle()
-                .fill(palette.orbA)
-                .frame(width: 420, height: 420)
-                .blur(radius: 60)
-                .offset(x: -420, y: -180)
-
-            Circle()
-                .fill(palette.orbB)
-                .frame(width: 520, height: 520)
-                .blur(radius: 80)
-                .offset(x: 420, y: 180)
-        }
+        palette.backgroundStart.ignoresSafeArea()
     }
 }
 
@@ -46,7 +27,7 @@ struct FrostedPanel<Content: View>: View {
             .padding(ClipFlowSpacing.panelPadding)
             .background(
                 RoundedRectangle(cornerRadius: ClipFlowRadius.panel, style: .continuous)
-                    .fill(.ultraThinMaterial)
+                    .fill(palette.softFill)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: ClipFlowRadius.panel, style: .continuous)
@@ -312,39 +293,37 @@ struct MetricCard: View {
     let palette: ClipFlowPalette
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: ClipFlowRadius.badge, style: .continuous)
-                        .fill(metric.tint.opacity(0.14))
-                        .frame(width: 38, height: 38)
+        HStack(spacing: 10) {
+            ZStack {
+                RoundedRectangle(cornerRadius: ClipFlowRadius.badge, style: .continuous)
+                    .fill(metric.tint.opacity(0.14))
+                    .frame(width: 32, height: 32)
 
-                    Image(systemName: metric.icon)
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(metric.tint)
-                }
-
-                Spacer(minLength: 10)
-
-                Text(metric.value)
-                    .font(ClipFlowTypography.metricValue)
+                Image(systemName: metric.icon)
+                    .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(metric.tint)
             }
 
-            VStack(alignment: .leading, spacing: ClipFlowSpacing.xs) {
+            VStack(alignment: .leading, spacing: 1) {
                 Text(metric.title)
-                    .font(ClipFlowTypography.cardTitle)
+                    .font(ClipFlowTypography.captionBold)
                     .lineLimit(1)
 
                 Text(metric.detail)
-                    .font(ClipFlowTypography.smallCaption)
+                    .font(ClipFlowTypography.badge)
                     .foregroundStyle(Color.secondary)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(1)
             }
+
+            Spacer(minLength: 4)
+
+            Text(metric.value)
+                .font(ClipFlowTypography.metricValue)
+                .foregroundStyle(metric.tint)
         }
-        .frame(maxWidth: .infinity, minHeight: 112, alignment: .leading)
-        .padding(ClipFlowSpacing.cardPadding)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: ClipFlowRadius.card, style: .continuous)
                 .fill(palette.softFill)

@@ -109,11 +109,11 @@ struct LibraryInspectorOverlay: View {
         .frame(maxHeight: maxHeight, alignment: .top)
         .background(
             RoundedRectangle(cornerRadius: ClipFlowRadius.overlay, style: .continuous)
-                .fill(.ultraThinMaterial)
+                .fill(palette.softFill)
         )
         .overlay(
             RoundedRectangle(cornerRadius: ClipFlowRadius.overlay, style: .continuous)
-                .stroke(Color.white.opacity(0.18), lineWidth: 1)
+                .stroke(palette.border, lineWidth: 1)
         )
         .shadow(color: Color.black.opacity(0.22), radius: 28, x: 0, y: 18)
     }

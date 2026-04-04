@@ -48,14 +48,17 @@ final class ClipFlowInteractiveHostingView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         pendingSingleClickWorkItem?.cancel()
+        animatePress(true)
 
         guard let onDoubleTap else {
             onPrimary()
+            animatePress(false)
             return
         }
 
         if event.clickCount >= 2 {
             onDoubleTap()
+            animatePress(false)
             return
         }
 
@@ -64,6 +67,16 @@ final class ClipFlowInteractiveHostingView: NSView {
         }
         pendingSingleClickWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + ClipFlowMotion.doubleClickDelay, execute: workItem)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in self?.animatePress(false) }
+    }
+
+    private func animatePress(_ pressed: Bool) {
+        let scale: CGFloat = pressed ? 0.97 : 1.0
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.12
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            self.layer?.setAffineTransform(CGAffineTransform(scaleX: scale, y: scale))
+        }
     }
 
     override func rightMouseDown(with event: NSEvent) {

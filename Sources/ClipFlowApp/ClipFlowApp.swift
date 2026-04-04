@@ -1,15 +1,17 @@
 import AppKit
+import Combine
 import SwiftUI
 
 @main
 struct ClipFlowApp: App {
     @NSApplicationDelegateAdaptor(ClipFlowAppDelegate.self) private var appDelegate
+    @StateObject private var store = ClipFlowStore.shared
 
     var body: some Scene {
         Settings {
-            SettingsView(store: ClipFlowStore.shared)
+            SettingsView(store: store)
                 .environment(\.locale, Locale(identifier: "zh-Hans"))
-                .preferredColorScheme(ClipFlowStore.shared.appearanceMode.preferredColorScheme)
+                .preferredColorScheme(store.appearanceMode.preferredColorScheme)
         }
     }
 }
@@ -17,6 +19,7 @@ struct ClipFlowApp: App {
 @MainActor
 final class ClipFlowAppDelegate: NSObject, NSApplicationDelegate {
     private var statusBarController: StatusBarController?
+    private var cancellables = Set<AnyCancellable>()
     private lazy var libraryWindowController = LibraryWindowController(
         store: ClipFlowStore.shared,
         locale: Locale(identifier: "zh-Hans")
@@ -29,6 +32,7 @@ final class ClipFlowAppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         ClipFlowRuntime.shared.start()
         statusBarController = StatusBarController(store: ClipFlowStore.shared)
+        bindAppearanceMode()
         AppNavigationCenter.shared.openLibraryWindow = { [weak self] in
             self?.showLibraryWindow()
         }
@@ -56,6 +60,27 @@ final class ClipFlowAppDelegate: NSObject, NSApplicationDelegate {
     @MainActor
     private func showSettingsWindow() {
         settingsWindowController.showAndActivate()
+    }
+
+    private func bindAppearanceMode() {
+        applyAppearance(ClipFlowStore.shared.appearanceMode)
+
+        ClipFlowStore.shared.$appearanceMode
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] mode in
+                self?.applyAppearance(mode)
+            }
+            .store(in: &cancellables)
+    }
+
+    private func applyAppearance(_ mode: AppearanceMode) {
+        let appearance = mode.nsAppearance
+        NSApp.appearance = appearance
+        libraryWindowController.applyAppearance(appearance)
+        settingsWindowController.applyAppearance(appearance)
+        statusBarController?.applyAppearance(appearance)
+        ClipFlowRuntime.shared.applyAppearance(appearance)
     }
 }
 
@@ -87,7 +112,14 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate {
 
         NSApp.activate(ignoringOtherApps: true)
         showWindow(nil)
+        window.orderFrontRegardless()
         window.makeKeyAndOrderFront(nil)
+    }
+
+    func applyAppearance(_ appearance: NSAppearance?) {
+        guard let window else { return }
+        window.appearance = appearance
+        window.displayIfNeeded()
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -123,7 +155,14 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
         NSApp.activate(ignoringOtherApps: true)
         showWindow(nil)
+        window.orderFrontRegardless()
         window.makeKeyAndOrderFront(nil)
+    }
+
+    func applyAppearance(_ appearance: NSAppearance?) {
+        guard let window else { return }
+        window.appearance = appearance
+        window.displayIfNeeded()
     }
 
     func windowWillClose(_ notification: Notification) {

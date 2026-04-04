@@ -84,27 +84,27 @@ struct ClipFlowPalette {
                 backgroundEnd: Color(red: 0.09, green: 0.12, blue: 0.16),
                 orbA: Color(red: 0.83, green: 0.55, blue: 0.28).opacity(0.28),
                 orbB: Color(red: 0.25, green: 0.58, blue: 0.88).opacity(0.24),
-                border: Color.white.opacity(0.14),
+                border: Color.white.opacity(0.10),
                 shadow: Color.black.opacity(0.34),
-                softFill: Color.white.opacity(0.06),
-                inputFill: Color.white.opacity(0.08),
+                softFill: Color(red: 0.13, green: 0.15, blue: 0.20),
+                inputFill: Color(red: 0.17, green: 0.19, blue: 0.25),
                 primaryButtonFill: Color(red: 0.30, green: 0.59, blue: 0.92),
-                secondaryButtonFill: Color.white.opacity(0.10)
+                secondaryButtonFill: Color(red: 0.20, green: 0.22, blue: 0.28)
             )
         }
 
         return ClipFlowPalette(
-            backgroundStart: Color(red: 0.98, green: 0.95, blue: 0.90),
-            backgroundMiddle: Color(red: 0.93, green: 0.96, blue: 0.99),
-            backgroundEnd: Color(red: 0.95, green: 0.93, blue: 0.98),
-            orbA: Color(red: 0.98, green: 0.80, blue: 0.47).opacity(0.38),
-            orbB: Color(red: 0.40, green: 0.73, blue: 0.95).opacity(0.22),
-            border: Color.white.opacity(0.7),
+            backgroundStart: Color(red: 0.94, green: 0.94, blue: 0.95),
+            backgroundMiddle: Color(red: 0.94, green: 0.94, blue: 0.95),
+            backgroundEnd: Color(red: 0.94, green: 0.94, blue: 0.95),
+            orbA: Color.clear,
+            orbB: Color.clear,
+            border: Color.black.opacity(0.08),
             shadow: Color.black.opacity(0.10),
-            softFill: Color.white.opacity(0.46),
-            inputFill: Color.white.opacity(0.68),
+            softFill: Color(red: 1.0, green: 1.0, blue: 1.0),
+            inputFill: Color(red: 0.96, green: 0.96, blue: 0.97),
             primaryButtonFill: Color(red: 0.30, green: 0.59, blue: 0.92),
-            secondaryButtonFill: Color.white.opacity(0.74)
+            secondaryButtonFill: Color(red: 0.90, green: 0.90, blue: 0.93)
         )
     }
 }
