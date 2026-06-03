@@ -35,18 +35,16 @@ struct MenuBarView: View {
                             LazyVStack(spacing: ClipFlowSpacing.sm) {
                                 ForEach(recentItems) { item in
                                     InteractiveCard(
-                                        rootView: AnyView(
-                                            MenuRecentClipRow(item: item, snippet: store.displaySnippet(for: item), store: store)
-                                                .padding(10)
-                                                .background(
-                                                    RoundedRectangle(cornerRadius: ClipFlowRadius.menuRow, style: .continuous)
-                                                        .fill(isDark ? Color.white.opacity(0.045) : Color.black.opacity(0.04))
-                                                )
-                                                .overlay(
-                                                    RoundedRectangle(cornerRadius: ClipFlowRadius.menuRow, style: .continuous)
-                                                        .stroke(isDark ? Color.white.opacity(0.08) : Color.black.opacity(0.06), lineWidth: 1)
-                                                )
-                                        ),
+                                        content: MenuRecentClipRow(item: item, snippet: store.displaySnippet(for: item), store: store)
+                                            .padding(10)
+                                            .background(
+                                                RoundedRectangle(cornerRadius: ClipFlowRadius.menuRow, style: .continuous)
+                                                    .fill(isDark ? Color.white.opacity(0.045) : Color.black.opacity(0.04))
+                                            )
+                                            .overlay(
+                                                RoundedRectangle(cornerRadius: ClipFlowRadius.menuRow, style: .continuous)
+                                                    .stroke(isDark ? Color.white.opacity(0.08) : Color.black.opacity(0.06), lineWidth: 1)
+                                            ),
                                         onPrimary: {
                                             ClipFlowRuntime.shared.copyToClipboard(item)
                                         },

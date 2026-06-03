@@ -7,18 +7,35 @@ import UniformTypeIdentifiers
 private struct CapturedImagePayload {
     let data: Data
     let size: CGSize
+    /// A thumbnail-sized NSImage created during capture, used for cache insertion.
+    /// This avoids re-loading the full PNG from disk and creating a second NSImage later.
+    let previewThumbnail: NSImage?
 }
 
 private extension NSImage {
+    /// Convert pasteboard image to PNG payload while also producing a lightweight thumbnail for caching.
+    /// Using autoreleasepool ensures intermediate representations (tiff, bitmap) are released promptly.
     func clipFlowPNGPayload() -> CapturedImagePayload? {
-        guard let tiffRepresentation,
-              let bitmap = NSBitmapImageRep(data: tiffRepresentation),
-              let pngData = bitmap.representation(using: .png, properties: [:]) else {
-            return nil
-        }
+        let payload: CapturedImagePayload? = autoreleasepool {
+            guard let tiffRepresentation,
+                  let bitmap = NSBitmapImageRep(data: tiffRepresentation),
+                  let pngData = bitmap.representation(using: .png, properties: [:]) else {
+                return nil
+            }
 
-        let size = CGSize(width: bitmap.pixelsWide, height: bitmap.pixelsHigh)
-        return CapturedImagePayload(data: pngData, size: size)
+            let pixelSize = CGSize(width: bitmap.pixelsWide, height: bitmap.pixelsHigh)
+
+            // Create thumbnail at display size so the cache only holds lightweight images
+            let thumbnail: NSImage
+            if max(pixelSize.width, pixelSize.height) > ClipFlowThumbnail.maxDimension {
+                thumbnail = ClipFlowThumbnail.downsample(self)
+            } else {
+                thumbnail = self
+            }
+
+            return CapturedImagePayload(data: pngData, size: pixelSize, previewThumbnail: thumbnail)
+        }
+        return payload
     }
 }
 
@@ -257,7 +274,8 @@ final class ClipboardMonitor {
                 imagePayload.data,
                 size: imagePayload.size,
                 sourceApp: frontmostApp?.localizedName ?? "未知应用",
-                sourceBundleID: sourceBundleID
+                sourceBundleID: sourceBundleID,
+                previewThumbnail: imagePayload.previewThumbnail
             )
             return
         }
@@ -683,9 +701,7 @@ struct QuickPastePanelView: View {
                         LazyVStack(spacing: ClipFlowSpacing.sm) {
                             ForEach(clips) { item in
                                 InteractiveCard(
-                                    rootView: AnyView(
-                                        HUDRow(item: item, store: store, isSelected: selectedItemID == item.id)
-                                    ),
+                                    content: HUDRow(item: item, store: store, isSelected: selectedItemID == item.id),
                                     onPrimary: {
                                         selectedItemID = item.id
                                     },

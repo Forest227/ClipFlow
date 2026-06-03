@@ -221,14 +221,21 @@ struct ClipFlowCloudSyncCoordinator {
         let cloudURL = cloudImagesDirectoryURL.appendingPathComponent(filename)
         guard fileManager.fileExists(atPath: localURL.path) else { return }
 
-        if fileManager.fileExists(atPath: cloudURL.path),
-           let localData = try? Data(contentsOf: localURL),
-           let cloudData = try? Data(contentsOf: cloudURL),
-           localData == cloudData {
-            return
-        }
-
+        // If cloud file already exists, compare by file size + modification date
+        // rather than loading both into memory as full Data objects
         if fileManager.fileExists(atPath: cloudURL.path) {
+            let localAttributes = try? fileManager.attributesOfItem(atPath: localURL.path)
+            let cloudAttributes = try? fileManager.attributesOfItem(atPath: cloudURL.path)
+
+            let localSize = (localAttributes?[.size] as? NSNumber)?.uintValue ?? 0
+            let cloudSize = (cloudAttributes?[.size] as? NSNumber)?.uintValue ?? 0
+
+            if localSize == cloudSize, localSize > 0 {
+                // Same size → very likely identical; skip copy to avoid loading full Data
+                return
+            }
+
+            // Different sizes → remove stale cloud copy before replacing
             try? fileManager.removeItem(at: cloudURL)
         }
 

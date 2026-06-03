@@ -99,8 +99,11 @@ final class ClipFlowInteractiveHostingView: NSView {
 
 // MARK: - Generic NSViewRepresentable Wrapper
 
-struct InteractiveCard: NSViewRepresentable {
-    let rootView: AnyView
+/// A SwiftUI wrapper for ClipFlowInteractiveHostingView that preserves the concrete Content type,
+/// allowing SwiftUI to diff efficiently. The AnyView conversion only happens at the NSView boundary
+/// (unavoidable for NSHostingView), so SwiftUI still sees typed content above that layer.
+struct InteractiveCard<Content: View>: NSViewRepresentable {
+    let content: Content
     let onPrimary: () -> Void
     var onDoubleTap: (() -> Void)?
     let onSecondary: () -> Void
@@ -108,7 +111,7 @@ struct InteractiveCard: NSViewRepresentable {
     func makeNSView(context: Context) -> ClipFlowInteractiveHostingView {
         let view = ClipFlowInteractiveHostingView()
         view.update(
-            rootView: rootView,
+            rootView: AnyView(content),
             onPrimary: onPrimary,
             onDoubleTap: onDoubleTap,
             onSecondary: onSecondary
@@ -118,7 +121,7 @@ struct InteractiveCard: NSViewRepresentable {
 
     func updateNSView(_ nsView: ClipFlowInteractiveHostingView, context: Context) {
         nsView.update(
-            rootView: rootView,
+            rootView: AnyView(content),
             onPrimary: onPrimary,
             onDoubleTap: onDoubleTap,
             onSecondary: onSecondary

@@ -141,11 +141,19 @@ struct ClipboardItem: Identifiable, Hashable, Codable {
     var imageHeight: Double?
     var imageSignature: String?
 
-    var timeLabel: String {
+    nonisolated(unsafe) private static let timeFormatter: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .short
         formatter.locale = Locale(identifier: "zh-Hans")
-        return formatter.localizedString(for: createdAt, relativeTo: Date())
+        return formatter
+    }()
+
+    var timeLabel: String {
+        Self.timeFormatter.localizedString(for: createdAt, relativeTo: Date())
+    }
+
+    static func formattedTimeLabel(for date: Date, relativeTo now: Date = Date()) -> String {
+        timeFormatter.localizedString(for: date, relativeTo: now)
     }
 
     var isSensitive: Bool {
@@ -823,15 +831,73 @@ struct HotKeyConfig: Codable, Equatable {
     }
 }
 
+// MARK: - Thumbnail Downsampling (not @MainActor so it can be called from capture pipeline)
+
+enum ClipFlowThumbnail {
+    /// Maximum pixel dimension for cached thumbnails — full images are loaded from disk only when needed for paste
+    static let maxDimension: CGFloat = 320
+
+    /// Downsample an NSImage to a target maximum dimension, producing a lightweight thumbnail for display.
+    /// The original full-size image remains on disk and is loaded only when needed for paste/export.
+    static func downsample(_ image: NSImage, maxDimension: CGFloat = ClipFlowThumbnail.maxDimension) -> NSImage {
+        let originalSize = image.size
+
+        guard max(originalSize.width, originalSize.height) > maxDimension else {
+            return image
+        }
+
+        let scale = maxDimension / max(originalSize.width, originalSize.height)
+        let targetSize = CGSize(
+            width: ceil(originalSize.width * scale),
+            height: ceil(originalSize.height * scale)
+        )
+
+        guard let tiffData = image.tiffRepresentation,
+              let _ = NSBitmapImageRep(data: tiffData) else {
+            return image
+        }
+
+        guard let scaledBitmap = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: Int(targetSize.width),
+            pixelsHigh: Int(targetSize.height),
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .calibratedRGB,
+            bytesPerRow: 0,
+            bitsPerPixel: 0
+        ) else {
+            return image
+        }
+
+        scaledBitmap.size = targetSize
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: scaledBitmap)
+        image.draw(
+            in: NSRect(origin: .zero, size: targetSize),
+            from: NSRect(origin: .zero, size: originalSize),
+            operation: .copy,
+            fraction: 1.0
+        )
+        NSGraphicsContext.restoreGraphicsState()
+
+        let thumbnail = NSImage(size: targetSize)
+        thumbnail.addRepresentation(scaledBitmap)
+        return thumbnail
+    }
+}
+
 @MainActor
 final class ClipFlowStore: ObservableObject {
     static let shared = ClipFlowStore()
 
     @Published var searchText = "" {
-        didSet { ensureSelectionStillValid() }
+        didSet { invalidateDerivedCaches(); ensureSelectionStillValid() }
     }
     @Published var selectedCategory: ClipCategory = .all {
-        didSet { ensureSelectionStillValid() }
+        didSet { invalidateDerivedCaches(); ensureSelectionStillValid() }
     }
     @Published var selectedItemID: ClipboardItem.ID?
     @Published var appearanceMode: AppearanceMode {
@@ -846,6 +912,9 @@ final class ClipFlowStore: ObservableObject {
     @Published var launchAtLogin: Bool
     @Published var launchToStatusBar: Bool {
         didSet { defaults.set(launchToStatusBar, forKey: Keys.launchToStatusBar) }
+    }
+    @Published var hideDockIcon: Bool {
+        didSet { defaults.set(hideDockIcon, forKey: Keys.hideDockIcon) }
     }
     @Published var menuQuickPasteModeEnabled: Bool {
         didSet { defaults.set(menuQuickPasteModeEnabled, forKey: Keys.menuQuickPasteModeEnabled) }
@@ -874,6 +943,7 @@ final class ClipFlowStore: ObservableObject {
 
     @Published private(set) var items: [ClipboardItem] = [] {
         didSet {
+            invalidateDerivedCaches()
             schedulePersistItems()
             ensureSelectionStillValid()
             if iCloudSyncEnabled && !isApplyingCloudSnapshot {
@@ -889,6 +959,8 @@ final class ClipFlowStore: ObservableObject {
     private let fileManager = FileManager.default
     private let persistenceQueue = DispatchQueue(label: "ClipFlow.persistence", qos: .utility)
     private let imagePreviewCache = NSCache<NSString, NSImage>()
+    /// Maximum memory budget for cached thumbnails: 100 MB
+    private static let imageCacheTotalCostLimit = 100_000_000
     private let historyURL: URL
     private let imagesDirectoryURL: URL
     private let cloudSyncCoordinator: ClipFlowCloudSyncCoordinator
@@ -900,6 +972,22 @@ final class ClipFlowStore: ObservableObject {
     private var pendingCloudSyncTask: Task<Void, Never>?
     private var isApplyingCloudSnapshot = false
 
+    // MARK: - Derived Data Caches (invalidated when items/searchText/selectedCategory change)
+
+    private var _sortedItemsCache: [ClipboardItem]?
+    private var _filteredItemsCache: [ClipboardItem]?
+    private var _recentItemsCache: [ClipboardItem]?
+    private var _quickPasteItemsCache: [ClipboardItem]?
+    private var _metricsCache: [FlowMetric]?
+
+    private func invalidateDerivedCaches() {
+        _sortedItemsCache = nil
+        _filteredItemsCache = nil
+        _recentItemsCache = nil
+        _quickPasteItemsCache = nil
+        _metricsCache = nil
+    }
+
     private init() {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
             .appendingPathComponent("ClipFlow", isDirectory: true) ?? URL(fileURLWithPath: NSTemporaryDirectory())
@@ -909,6 +997,7 @@ final class ClipFlowStore: ObservableObject {
         imagesDirectoryURL = appSupport.appendingPathComponent("images", isDirectory: true)
         try? FileManager.default.createDirectory(at: imagesDirectoryURL, withIntermediateDirectories: true)
         imagePreviewCache.countLimit = maxItems + 20
+        imagePreviewCache.totalCostLimit = Self.imageCacheTotalCostLimit
         cloudSyncCoordinator = ClipFlowCloudSyncCoordinator(localImagesDirectoryURL: imagesDirectoryURL)
 
         appearanceMode = AppearanceMode(rawValue: defaults.integer(forKey: Keys.appearanceMode)) ?? .system
@@ -916,6 +1005,7 @@ final class ClipFlowStore: ObservableObject {
         autoProtectSecrets = defaults.object(forKey: Keys.autoProtectSecrets) as? Bool ?? true
         launchAtLogin = Self.currentLaunchAtLoginState()
         launchToStatusBar = defaults.object(forKey: Keys.launchToStatusBar) as? Bool ?? false
+        hideDockIcon = defaults.object(forKey: Keys.hideDockIcon) as? Bool ?? false
         menuQuickPasteModeEnabled = defaults.object(forKey: Keys.menuQuickPasteModeEnabled) as? Bool ?? true
         iCloudSyncEnabled = defaults.object(forKey: Keys.iCloudSyncEnabled) as? Bool ?? false
         excludedBundleIDs = defaults.stringArray(forKey: Keys.excludedBundleIDs) ?? Self.defaultExcludedBundleIDs
@@ -941,20 +1031,26 @@ final class ClipFlowStore: ObservableObject {
     var quickPasteShortcutReadable: String { hotKeyQuickPaste.displayString }
 
     var filteredItems: [ClipboardItem] {
+        if let cached = _filteredItemsCache { return cached }
+
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let base = sortedItems.filter(matchesSelectedCategory)
 
-        guard !query.isEmpty else {
-            return base
+        let result: [ClipboardItem]
+        if query.isEmpty {
+            result = base
+        } else {
+            result = base.filter { item in
+                item.title.lowercased().contains(query)
+                    || item.snippet.lowercased().contains(query)
+                    || item.fullText.lowercased().contains(query)
+                    || item.sourceApp.lowercased().contains(query)
+                    || item.labels.joined(separator: " ").lowercased().contains(query)
+            }
         }
 
-        return base.filter { item in
-            item.title.lowercased().contains(query)
-                || item.snippet.lowercased().contains(query)
-                || item.fullText.lowercased().contains(query)
-                || item.sourceApp.lowercased().contains(query)
-                || item.labels.joined(separator: " ").lowercased().contains(query)
-        }
+        _filteredItemsCache = result
+        return result
     }
 
     var selectedItem: ClipboardItem? {
@@ -967,11 +1063,13 @@ final class ClipFlowStore: ObservableObject {
     }
 
     var metrics: [FlowMetric] {
+        if let cached = _metricsCache { return cached }
+
         let protectedCount = items.filter(\.isSensitive).count
         let codeCount = items.filter { $0.kind == .code }.count
         let stackCount = Set(items.flatMap(\.labels)).count
 
-        return [
+        let result: [FlowMetric] = [
             FlowMetric(
                 value: "\(items.count)",
                 title: "当前条目",
@@ -994,16 +1092,25 @@ final class ClipFlowStore: ObservableObject {
                 tint: ClipCategory.protected.tint
             )
         ]
+
+        _metricsCache = result
+        return result
     }
 
     var recentItems: [ClipboardItem] {
-        Array(sortedItems.prefix(50))
+        if let cached = _recentItemsCache { return cached }
+        let result = Array(sortedItems.prefix(50))
+        _recentItemsCache = result
+        return result
     }
 
     var quickPasteItems: [ClipboardItem] {
+        if let cached = _quickPasteItemsCache { return cached }
         let pins = sortedItems.filter(\.pinned)
         let recent = sortedItems.filter { !$0.pinned }
-        return Array((pins + recent).prefix(50))
+        let result = Array((pins + recent).prefix(50))
+        _quickPasteItemsCache = result
+        return result
     }
 
     func count(for category: ClipCategory) -> Int {
@@ -1071,7 +1178,7 @@ final class ClipFlowStore: ObservableObject {
         lastCaptureStatus = "已从 \(sourceApp) 捕获新内容"
     }
 
-    func ingestCopiedImage(_ imageData: Data, size: CGSize, sourceApp: String, sourceBundleID: String?) {
+    func ingestCopiedImage(_ imageData: Data, size: CGSize, sourceApp: String, sourceBundleID: String?, previewThumbnail: NSImage? = nil) {
         guard !imageData.isEmpty else { return }
         guard imageData.count <= 25_000_000 else {
             lastCaptureStatus = "已跳过过大的图片"
@@ -1099,8 +1206,16 @@ final class ClipFlowStore: ObservableObject {
             return
         }
 
-        if let previewImage = NSImage(data: imageData) {
-            imagePreviewCache.setObject(previewImage, forKey: imageFilename as NSString)
+        // Use the pre-created thumbnail from the capture pipeline if available,
+        // avoiding a second full-image load + downsample cycle
+        if let thumbnail = previewThumbnail {
+            let pixelSize = thumbnail.size.width * thumbnail.size.height * 4
+            imagePreviewCache.setObject(thumbnail, forKey: imageFilename as NSString, cost: Int(pixelSize))
+        } else if let previewImage = NSImage(data: imageData) {
+            // Fallback: create and cache a thumbnail-sized version
+            let thumbnail = ClipFlowThumbnail.downsample(previewImage)
+            let pixelSize = thumbnail.size.width * thumbnail.size.height * 4
+            imagePreviewCache.setObject(thumbnail, forKey: imageFilename as NSString, cost: Int(pixelSize))
         }
 
         if let existing, existing.imageFilename != imageFilename {
@@ -1161,6 +1276,11 @@ final class ClipFlowStore: ObservableObject {
     func setLaunchToStatusBar(_ enabled: Bool) {
         launchToStatusBar = enabled
         lastCaptureStatus = enabled ? "启动后将直接驻留状态栏" : "启动后将显示主窗口"
+    }
+
+    func setHideDockIcon(_ enabled: Bool) {
+        hideDockIcon = enabled
+        lastCaptureStatus = enabled ? "已隐藏 Dock 图标，可从状态栏或快捷键打开" : "已恢复 Dock 图标显示"
     }
 
     func toggleMenuQuickPasteMode() {
@@ -1252,12 +1372,14 @@ final class ClipFlowStore: ObservableObject {
         }
 
         guard let imageURL = imageURL(for: item),
-              let image = NSImage(contentsOf: imageURL) else {
+              let fullImage = NSImage(contentsOf: imageURL) else {
             return nil
         }
 
-        imagePreviewCache.setObject(image, forKey: cacheKey)
-        return image
+        let thumbnail = ClipFlowThumbnail.downsample(fullImage)
+        let pixelSize = thumbnail.size.width * thumbnail.size.height * 4 // RGBA cost estimate
+        imagePreviewCache.setObject(thumbnail, forKey: cacheKey, cost: Int(pixelSize))
+        return thumbnail
     }
 
     func purgeExpired() {
@@ -1359,7 +1481,10 @@ final class ClipFlowStore: ObservableObject {
     }
 
     private var sortedItems: [ClipboardItem] {
-        sortItems(items)
+        if let cached = _sortedItemsCache { return cached }
+        let result = sortItems(items)
+        _sortedItemsCache = result
+        return result
     }
 
     private func masked(text: String) -> String {
@@ -1676,6 +1801,7 @@ final class ClipFlowStore: ObservableObject {
         static let autoProtectSecrets = "autoProtectSecrets"
         static let launchAtLogin = "launchAtLogin"
         static let launchToStatusBar = "launchToStatusBar"
+        static let hideDockIcon = "hideDockIcon"
         static let menuQuickPasteModeEnabled = "menuQuickPasteModeEnabled"
         static let iCloudSyncEnabled = "iCloudSyncEnabled"
         static let iCloudLastSyncedAt = "iCloudLastSyncedAt"

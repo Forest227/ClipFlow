@@ -211,9 +211,10 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
 
 private struct PopoverRoot: View {
     @ObservedObject var store: ClipFlowStore
+    @Environment(\.colorScheme) private var colorScheme
 
     private var bgColor: Color {
-        store.appearanceMode == .light
+        colorScheme == .light
             ? Color(red: 0.94, green: 0.94, blue: 0.95)
             : Color(red: 0.11, green: 0.12, blue: 0.16)
     }
@@ -221,7 +222,7 @@ private struct PopoverRoot: View {
     var body: some View {
         MenuBarView(store: store)
             .frame(width: 320)
-            .preferredColorScheme(store.appearanceMode == .light ? .light : .dark)
+            .preferredColorScheme(store.appearanceMode.preferredColorScheme)
             .background(bgColor)
     }
 }

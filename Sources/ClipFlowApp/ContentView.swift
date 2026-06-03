@@ -388,14 +388,12 @@ struct LibraryView: View {
                         LazyVStack(spacing: 10) {
                             ForEach(store.filteredItems) { item in
                                 InteractiveCard(
-                                    rootView: AnyView(
-                                        ClipboardCard(
-                                            item: item,
-                                            isSelected: store.selectedItem?.id == item.id,
-                                            displayedSnippet: store.displaySnippet(for: item),
-                                            palette: palette,
-                                            store: store
-                                        )
+                                    content: ClipboardCard(
+                                        item: item,
+                                        isSelected: store.selectedItem?.id == item.id,
+                                        displayedSnippet: store.displaySnippet(for: item),
+                                        palette: palette,
+                                        store: store
                                     ),
                                     onPrimary: {
                                         withAnimation(ClipFlowMotion.selection) {

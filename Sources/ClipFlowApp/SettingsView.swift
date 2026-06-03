@@ -140,6 +140,18 @@ struct SettingsView: View {
                                 )
 
                                 SettingsToggleCard(
+                                    icon: "dock.rectangle",
+                                    tint: ClipCategory.smartStacks.tint,
+                                    title: "隐藏 Dock 应用图标",
+                                    detail: "开启后不会显示在 Dock 和应用切换器中，仍可通过状态栏图标或快捷键打开。",
+                                    isOn: Binding(
+                                        get: { store.hideDockIcon },
+                                        set: { store.setHideDockIcon($0) }
+                                    ),
+                                    showsDivider: true
+                                )
+
+                                SettingsToggleCard(
                                     icon: "folder.fill",
                                     tint: store.iCloudSyncTint,
                                     title: "文稿目录同步历史",

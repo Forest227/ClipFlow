@@ -33,6 +33,7 @@ final class ClipFlowAppDelegate: NSObject, NSApplicationDelegate {
         ClipFlowRuntime.shared.start()
         statusBarController = StatusBarController(store: ClipFlowStore.shared)
         bindAppearanceMode()
+        bindActivationPolicy()
         AppNavigationCenter.shared.openLibraryWindow = { [weak self] in
             self?.showLibraryWindow()
         }
@@ -72,6 +73,23 @@ final class ClipFlowAppDelegate: NSObject, NSApplicationDelegate {
                 self?.applyAppearance(mode)
             }
             .store(in: &cancellables)
+    }
+
+    private func bindActivationPolicy() {
+        applyActivationPolicy(hideDockIcon: ClipFlowStore.shared.hideDockIcon)
+
+        ClipFlowStore.shared.$hideDockIcon
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] hideDockIcon in
+                self?.applyActivationPolicy(hideDockIcon: hideDockIcon)
+            }
+            .store(in: &cancellables)
+    }
+
+    private func applyActivationPolicy(hideDockIcon: Bool) {
+        let policy: NSApplication.ActivationPolicy = hideDockIcon ? .accessory : .regular
+        NSApp.setActivationPolicy(policy)
     }
 
     private func applyAppearance(_ mode: AppearanceMode) {
