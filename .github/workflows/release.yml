@@ -17,7 +17,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Prepare release metadata
-        shell: zsh
+        shell: /bin/zsh {0}
         run: |
           set -euo pipefail
 
@@ -35,11 +35,11 @@ jobs:
           fi
 
       - name: Build app and DMG
-        shell: zsh
+        shell: /bin/zsh {0}
         run: zsh scripts/build_release_dmg.sh "${TAG_NAME}"
 
       - name: Ensure GitHub CLI is available
-        shell: zsh
+        shell: /bin/zsh {0}
         run: |
           set -euo pipefail
           if ! command -v gh >/dev/null 2>&1; then
@@ -49,7 +49,7 @@ jobs:
       - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-        shell: zsh
+        shell: /bin/zsh {0}
         run: |
           set -euo pipefail
 
