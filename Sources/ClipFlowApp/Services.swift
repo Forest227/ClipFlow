@@ -713,101 +713,12 @@ struct QuickPastePanelView: View {
         let clips = activeTab == .recent ? store.hudItems(matching: query) : store.items.filter(\.pinned)
 
         ZStack {
-            VStack(alignment: .leading, spacing: ClipFlowSpacing.md) {
-                HStack {
-                    Label("快速粘贴", systemImage: "cursorarrow.rays")
-                        .font(ClipFlowTypography.bodyBold)
-
-                    Spacer()
-
-                    Text("↑↓ 导航 · Enter 粘贴")
-                        .font(ClipFlowTypography.tinyBadge)
-                        .foregroundStyle(Color.secondary)
-
-                    Button("关闭", action: onClose)
-                        .buttonStyle(ClipFlowButtonStyle(fill: palette.secondaryButtonFill, size: .compact))
-                }
-
-                // Tab bar
-                HStack(spacing: ClipFlowSpacing.xs) {
-                    tabButton(title: "最近", icon: "clock", tab: .recent, palette: palette)
-                    tabButton(title: "置顶", icon: "pin", tab: .pinned, palette: palette)
-                }
-
-                if activeTab == .recent {
-                    searchBar(palette: palette)
-                }
-
-                if clips.isEmpty {
-                    VStack(alignment: .leading, spacing: ClipFlowSpacing.sm) {
-                        Text(activeTab == .recent ? "还没有捕获到内容" : "还没有置顶条目")
-                            .font(ClipFlowTypography.sectionTitle)
-                        Text(activeTab == .recent
-                            ? "先去其他应用复制文字或图片，然后按下 Option + V，就能在指针附近把它调出来。"
-                            : "在最近内容中右键选择条目，点击「加入快贴」即可置顶。置顶内容不会被自动清除。")
-                            .font(ClipFlowTypography.caption)
-                            .foregroundStyle(Color.secondary)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                    .padding(.top, ClipFlowSpacing.sm)
-                } else {
-                    ScrollView {
-                        LazyVStack(spacing: ClipFlowSpacing.sm) {
-                            ForEach(clips) { item in
-                                InteractiveCard(
-                                    content: hudRowCard(item: item, isDark: isDark),
-                                    onPrimary: {
-                                        selectedItemID = item.id
-                                        onClose()
-                                        onPaste(item)
-                                    },
-                                    onSecondary: {
-                                        selectedItemID = item.id
-                                        withAnimation(ClipFlowMotion.overlay) {
-                                            inspectingItemID = inspectingItemID == item.id ? nil : item.id
-                                        }
-                                    }
-                                )
-                            }
-                        }
-                    }
-                    .scrollIndicators(.hidden)
-                }
-
-                HStack(spacing: ClipFlowSpacing.sm) {
-                    Button("粘贴选中项") {
-                        if let selected = clips.first(where: { $0.id == selectedItemID }) ?? clips.first {
-                            selectedItemID = selected.id
-                            onClose()
-                            onPaste(selected)
-                        }
-                    }
-                    .buttonStyle(ClipFlowButtonStyle(fill: palette.primaryButtonFill, foreground: .white, size: .compact))
-                }
-            }
-            .overlay(
-                Color.black.opacity(inspectingItem == nil ? 0 : 0.35)
-            )
-
-            if let inspectingItem {
-                HUDInspectorOverlay(
-                    item: inspectingItem,
-                    store: store,
-                    onClose: {
-                        withAnimation(ClipFlowMotion.overlay) {
-                            inspectingItemID = nil
-                        }
-                    },
-                    onPaste: {
-                        withAnimation(ClipFlowMotion.overlay) {
-                            inspectingItemID = nil
-                        }
-                        onClose()
-                        onPaste(inspectingItem)
-                    }
+            mainContent(palette: palette, isDark: isDark, clips: clips)
+                .overlay(
+                    Color.black.opacity(inspectingItem == nil ? 0 : 0.35)
                 )
-                .transition(ClipFlowMotion.overlayTransition)
-            }
+
+            inspectorOverlay
         }
         .padding(ClipFlowSpacing.cardPadding)
         .frame(width: QuickPastePanelLayout.panelWidth, height: QuickPastePanelLayout.panelHeight, alignment: .topLeading)
@@ -844,6 +755,125 @@ struct QuickPastePanelView: View {
         )
     }
 
+    @ViewBuilder
+    private func mainContent(palette: ClipFlowPalette, isDark: Bool, clips: [ClipboardItem]) -> some View {
+        VStack(alignment: .leading, spacing: ClipFlowSpacing.md) {
+            headerRow(palette: palette)
+
+            // Tab bar
+            HStack(spacing: ClipFlowSpacing.xs) {
+                tabButton(title: "最近", icon: "clock", tab: .recent, palette: palette, isActive: activeTab == .recent) { activeTab = .recent }
+                tabButton(title: "置顶", icon: "pin", tab: .pinned, palette: palette, isActive: activeTab == .pinned) { activeTab = .pinned }
+            }
+
+            if activeTab == .recent {
+                searchBar(palette: palette, text: $query)
+            }
+
+            if clips.isEmpty {
+                emptyState
+            } else {
+                clipList(clips: clips, isDark: isDark)
+            }
+
+            pasteButton(palette: palette, clips: clips)
+        }
+    }
+
+    @ViewBuilder
+    private func headerRow(palette: ClipFlowPalette) -> some View {
+        HStack {
+            Label("快速粘贴", systemImage: "cursorarrow.rays")
+                .font(ClipFlowTypography.bodyBold)
+
+            Spacer()
+
+            Text("↑↓ 导航 · Enter 粘贴")
+                .font(ClipFlowTypography.tinyBadge)
+                .foregroundStyle(Color.secondary)
+
+            Button("关闭", action: onClose)
+                .buttonStyle(ClipFlowButtonStyle(fill: palette.secondaryButtonFill, size: .compact))
+        }
+    }
+
+    @ViewBuilder
+    private var emptyState: some View {
+        VStack(alignment: .leading, spacing: ClipFlowSpacing.sm) {
+            Text(activeTab == .recent ? "还没有捕获到内容" : "还没有置顶条目")
+                .font(ClipFlowTypography.sectionTitle)
+            Text(activeTab == .recent
+                ? "先去其他应用复制文字或图片，然后按下 Option + V，就能在指针附近把它调出来。"
+                : "在最近内容中右键选择条目，点击「加入快贴」即可置顶。置顶内容不会被自动清除。")
+                .font(ClipFlowTypography.caption)
+                .foregroundStyle(Color.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding(.top, ClipFlowSpacing.sm)
+    }
+
+    @ViewBuilder
+    private func clipList(clips: [ClipboardItem], isDark: Bool) -> some View {
+        ScrollView {
+            LazyVStack(spacing: ClipFlowSpacing.sm) {
+                ForEach(clips) { item in
+                    InteractiveCard(
+                        content: hudRowCard(item: item, isDark: isDark),
+                        onPrimary: {
+                            selectedItemID = item.id
+                            onClose()
+                            onPaste(item)
+                        },
+                        onSecondary: {
+                            selectedItemID = item.id
+                            withAnimation(ClipFlowMotion.overlay) {
+                                inspectingItemID = inspectingItemID == item.id ? nil : item.id
+                            }
+                        }
+                    )
+                }
+            }
+        }
+        .scrollIndicators(.hidden)
+    }
+
+    @ViewBuilder
+    private func pasteButton(palette: ClipFlowPalette, clips: [ClipboardItem]) -> some View {
+        HStack(spacing: ClipFlowSpacing.sm) {
+            Button("粘贴选中项") {
+                if let selected = clips.first(where: { $0.id == selectedItemID }) ?? clips.first {
+                    selectedItemID = selected.id
+                    onClose()
+                    onPaste(selected)
+                }
+            }
+            .buttonStyle(ClipFlowButtonStyle(fill: palette.primaryButtonFill, foreground: .white, size: .compact))
+        }
+    }
+
+    @ViewBuilder
+    private var inspectorOverlay: some View {
+        if let inspectingItem {
+            HUDInspectorOverlay(
+                item: inspectingItem,
+                store: store,
+                onClose: {
+                    withAnimation(ClipFlowMotion.overlay) {
+                        inspectingItemID = nil
+                    }
+                },
+                onPaste: {
+                    withAnimation(ClipFlowMotion.overlay) {
+                        inspectingItemID = nil
+                    }
+                    onClose()
+                    onPaste(inspectingItem)
+                }
+            )
+            .transition(ClipFlowMotion.overlayTransition)
+        }
+    }
+
     private var inspectingItem: ClipboardItem? {
         guard let inspectingItemID else { return nil }
         return store.item(withID: inspectingItemID)
@@ -867,11 +897,10 @@ struct QuickPastePanelView: View {
     }
 
     @ViewBuilder
-    private func tabButton(title: String, icon: String, tab: PanelTab, palette: ClipFlowPalette) -> some View {
-        let isActive = activeTab == tab
+    private func tabButton(title: String, icon: String, tab: PanelTab, palette: ClipFlowPalette, isActive: Bool, onSelect: @escaping () -> Void) -> some View {
         Button {
             withAnimation(ClipFlowMotion.selection) {
-                activeTab = tab
+                onSelect()
             }
         } label: {
             HStack(spacing: 5) {
@@ -892,13 +921,13 @@ struct QuickPastePanelView: View {
     }
 
     @ViewBuilder
-    private func searchBar(palette: ClipFlowPalette) -> some View {
+    private func searchBar(palette: ClipFlowPalette, text: Binding<String>) -> some View {
         HStack(spacing: ClipFlowSpacing.sm) {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(Color.secondary)
 
-            TextField("搜索最近内容", text: $query)
+            TextField("搜索最近内容", text: text)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12, weight: .medium))
         }
