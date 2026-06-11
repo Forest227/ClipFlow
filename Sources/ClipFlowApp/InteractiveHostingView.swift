@@ -80,7 +80,9 @@ final class ClipFlowInteractiveHostingView: NSView {
     }
 
     override func rightMouseDown(with event: NSEvent) {
+        animatePress(true)
         onSecondary()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in self?.animatePress(false) }
     }
 
     override func otherMouseDown(with event: NSEvent) {

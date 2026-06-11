@@ -94,15 +94,15 @@ struct ClipFlowPalette {
         }
 
         return ClipFlowPalette(
-            backgroundStart: Color(red: 0.94, green: 0.94, blue: 0.95),
-            backgroundMiddle: Color(red: 0.94, green: 0.94, blue: 0.95),
-            backgroundEnd: Color(red: 0.94, green: 0.94, blue: 0.95),
+            backgroundStart: Color(red: 0.95, green: 0.95, blue: 0.96),
+            backgroundMiddle: Color(red: 0.95, green: 0.95, blue: 0.96),
+            backgroundEnd: Color(red: 0.95, green: 0.95, blue: 0.96),
             orbA: Color.clear,
             orbB: Color.clear,
             border: Color.black.opacity(0.08),
             shadow: Color.black.opacity(0.10),
-            softFill: Color(red: 1.0, green: 1.0, blue: 1.0),
-            inputFill: Color(red: 0.96, green: 0.96, blue: 0.97),
+            softFill: Color.white,
+            inputFill: Color(red: 0.93, green: 0.93, blue: 0.94),
             primaryButtonFill: Color(red: 0.30, green: 0.59, blue: 0.92),
             secondaryButtonFill: Color(red: 0.90, green: 0.90, blue: 0.93)
         )

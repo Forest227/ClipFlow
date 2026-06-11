@@ -20,10 +20,6 @@ struct ClipFlowApp: App {
 final class ClipFlowAppDelegate: NSObject, NSApplicationDelegate {
     private var statusBarController: StatusBarController?
     private var cancellables = Set<AnyCancellable>()
-    private lazy var libraryWindowController = LibraryWindowController(
-        store: ClipFlowStore.shared,
-        locale: Locale(identifier: "zh-Hans")
-    )
     private lazy var settingsWindowController = SettingsWindowController(
         store: ClipFlowStore.shared,
         locale: Locale(identifier: "zh-Hans")
@@ -34,28 +30,9 @@ final class ClipFlowAppDelegate: NSObject, NSApplicationDelegate {
         statusBarController = StatusBarController(store: ClipFlowStore.shared)
         bindAppearanceMode()
         bindActivationPolicy()
-        AppNavigationCenter.shared.openLibraryWindow = { [weak self] in
-            self?.showLibraryWindow()
-        }
         AppNavigationCenter.shared.openSettingsWindow = { [weak self] in
             self?.showSettingsWindow()
         }
-
-        if !ClipFlowStore.shared.launchToStatusBar {
-            showLibraryWindow()
-        }
-    }
-
-    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if !flag {
-            showLibraryWindow()
-        }
-        return true
-    }
-
-    @MainActor
-    private func showLibraryWindow() {
-        libraryWindowController.showAndActivate()
     }
 
     @MainActor
@@ -95,53 +72,9 @@ final class ClipFlowAppDelegate: NSObject, NSApplicationDelegate {
     private func applyAppearance(_ mode: AppearanceMode) {
         let appearance = mode.nsAppearance
         NSApp.appearance = appearance
-        libraryWindowController.applyAppearance(appearance)
         settingsWindowController.applyAppearance(appearance)
         statusBarController?.applyAppearance(appearance)
         ClipFlowRuntime.shared.applyAppearance(appearance)
-    }
-}
-
-@MainActor
-final class LibraryWindowController: NSWindowController, NSWindowDelegate {
-    init(store: ClipFlowStore, locale: Locale) {
-        let rootView = LibrarySceneRoot(store: store, locale: locale)
-        let hostingController = NSHostingController(rootView: rootView)
-        let window = NSWindow(contentViewController: hostingController)
-
-        window.title = "ClipFlow 剪流"
-        window.setContentSize(NSSize(width: 500, height: 780))
-        window.minSize = NSSize(width: 500, height: 600)
-        window.center()
-        window.isReleasedWhenClosed = false
-        window.setFrameAutosaveName("ClipFlowLibraryWindow")
-
-        super.init(window: window)
-        window.delegate = self
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    func showAndActivate() {
-        guard let window else { return }
-
-        NSApp.activate(ignoringOtherApps: true)
-        showWindow(nil)
-        window.orderFrontRegardless()
-        window.makeKeyAndOrderFront(nil)
-    }
-
-    func applyAppearance(_ appearance: NSAppearance?) {
-        guard let window else { return }
-        window.appearance = appearance
-        window.displayIfNeeded()
-    }
-
-    func windowWillClose(_ notification: Notification) {
-        window?.orderOut(nil)
     }
 }
 
@@ -152,12 +85,15 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         let hostingController = NSHostingController(rootView: rootView)
         let window = NSWindow(contentViewController: hostingController)
 
-        window.title = "ClipFlow 剪流设置"
-        window.setContentSize(NSSize(width: 540, height: 600))
-        window.minSize = NSSize(width: 540, height: 600)
+        window.title = "ClipFlow 剪流"
+        window.titlebarAppearsTransparent = true
+        window.styleMask = [.titled, .closable, .miniaturizable, .fullSizeContentView]
+        window.backgroundColor = .clear
+        window.setContentSize(NSSize(width: 380, height: 600))
+        window.minSize = NSSize(width: 380, height: 600)
+        window.maxSize = NSSize(width: 380, height: 9999)
         window.center()
         window.isReleasedWhenClosed = false
-        window.setFrameAutosaveName("ClipFlowSettingsWindow")
 
         super.init(window: window)
         window.delegate = self
@@ -188,25 +124,14 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 }
 
-private struct LibrarySceneRoot: View {
-    @ObservedObject var store: ClipFlowStore
-    let locale: Locale
-
-    var body: some View {
-        ContentView(store: store)
-            .frame(minWidth: 500, minHeight: 600)
-            .environment(\.locale, locale)
-            .preferredColorScheme(store.appearanceMode.preferredColorScheme)
-    }
-}
-
 private struct SettingsSceneRoot: View {
     @ObservedObject var store: ClipFlowStore
     let locale: Locale
 
     var body: some View {
         SettingsView(store: store)
-            .frame(minWidth: 540, minHeight: 600)
+            .ignoresSafeArea()
+            .frame(width: 380, height: 600)
             .environment(\.locale, locale)
             .preferredColorScheme(store.appearanceMode.preferredColorScheme)
     }

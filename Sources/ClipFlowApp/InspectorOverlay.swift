@@ -18,7 +18,7 @@ struct LibraryInspectorOverlay: View {
                         .font(ClipFlowTypography.captionBold)
                         .foregroundStyle(Color.secondary)
                     Text(item.title)
-                        .font(ClipFlowTypography.overlayTitle)
+                        .font(ClipFlowTypography.menuTitle)
                     Text("\(item.sourceApp) · \(item.timeLabel)")
                         .font(ClipFlowTypography.caption)
                         .foregroundStyle(Color.secondary)
@@ -47,7 +47,8 @@ struct LibraryInspectorOverlay: View {
                         item: item,
                         displayedText: store.displayFullText(for: item),
                         palette: palette,
-                        store: store
+                        imagePreview: store.imagePreview(for: item),
+                        isRevealed: store.isRevealed(item)
                     )
 
                     ViewThatFits(in: .horizontal) {
@@ -131,7 +132,7 @@ struct LibraryInspectorOverlay: View {
         Button {
             store.togglePin(item.id)
         } label: {
-            DetailActionLabel(title: item.pinned ? "取消置顶" : "加入快贴", icon: "pin.fill", tint: ClipCategory.smartStacks.tint)
+            DetailActionLabel(title: item.pinned ? "取消置顶" : "置顶", icon: "pin.fill", tint: Color.purple)
         }
         .buttonStyle(.plain)
 

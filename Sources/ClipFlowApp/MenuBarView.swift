@@ -3,77 +3,44 @@ import SwiftUI
 
 // MARK: - Menu Bar View (Status Bar Popover)
 
+private enum MenuBarTab {
+    case recent
+    case pinned
+}
+
 struct MenuBarView: View {
     @ObservedObject var store: ClipFlowStore
     @State private var inspectingItemID: UUID?
+    @State private var activeTab: MenuBarTab = .recent
     @Environment(\.colorScheme) private var colorScheme
+
+    private var bgColor: Color {
+        colorScheme == .light
+            ? Color(red: 1.0, green: 1.0, blue: 1.0)
+            : Color(red: 0.11, green: 0.12, blue: 0.16)
+    }
 
     var body: some View {
         let isDark = colorScheme == .dark
-        let recentItems = Array(store.recentItems.prefix(50))
+        let pinnedItems = store.items.filter(\.pinned)
         ZStack {
             VStack(alignment: .leading, spacing: ClipFlowSpacing.md) {
                 MenuPanelHeader(store: store)
 
-                if recentItems.isEmpty {
-                    Text("先去其他应用复制文字或图片，这里会立刻出现最近条目。")
-                        .font(ClipFlowTypography.caption)
-                        .foregroundStyle(Color.secondary)
-                        .padding(.horizontal, ClipFlowSpacing.xs)
-                } else {
-                    VStack(spacing: ClipFlowSpacing.sm) {
-                        HStack {
-                            Text("最近内容")
-                                .font(ClipFlowTypography.captionBold)
-                            Spacer()
-                            Text(store.menuQuickPasteModeEnabled ? "左键复制，双击快贴，右键查看详情" : "左键复制，右键查看详情")
-                                .font(ClipFlowTypography.smallCaption)
-                                .foregroundStyle(Color.secondary)
-                        }
+                // Tab bar
+                HStack(spacing: ClipFlowSpacing.xs) {
+                    menuTabButton(title: "最近", icon: "clock", tab: .recent)
+                    menuTabButton(title: "置顶", icon: "pin", tab: .pinned, badge: pinnedItems.isEmpty ? nil : "\(pinnedItems.count)")
+                }
 
-                        ScrollView {
-                            LazyVStack(spacing: ClipFlowSpacing.sm) {
-                                ForEach(recentItems) { item in
-                                    InteractiveCard(
-                                        content: MenuRecentClipRow(item: item, snippet: store.displaySnippet(for: item), store: store)
-                                            .padding(10)
-                                            .background(
-                                                RoundedRectangle(cornerRadius: ClipFlowRadius.menuRow, style: .continuous)
-                                                    .fill(isDark ? Color.white.opacity(0.045) : Color.black.opacity(0.04))
-                                            )
-                                            .overlay(
-                                                RoundedRectangle(cornerRadius: ClipFlowRadius.menuRow, style: .continuous)
-                                                    .stroke(isDark ? Color.white.opacity(0.08) : Color.black.opacity(0.06), lineWidth: 1)
-                                            ),
-                                        onPrimary: {
-                                            ClipFlowRuntime.shared.copyToClipboard(item)
-                                        },
-                                        onDoubleTap: store.menuQuickPasteModeEnabled ? {
-                                            ClipFlowRuntime.shared.paste(item)
-                                        } : nil,
-                                        onSecondary: {
-                                            toggleMenuInspector(for: item)
-                                        }
-                                    )
-                                }
-                            }
-                        }
-                        .frame(maxHeight: 392)
-                    }
+                // Tab content
+                if activeTab == .recent {
+                    recentTabContent(isDark: isDark)
+                } else {
+                    pinnedTabContent(items: pinnedItems, isDark: isDark)
                 }
 
                 HStack(spacing: ClipFlowSpacing.sm) {
-                    Button {
-                        AppNavigationCenter.shared.openLibraryKeepingPopover?()
-                    } label: {
-                        MenuCompactActionLabel(
-                            title: "主窗口",
-                            icon: "rectangle.on.rectangle",
-                            tint: ClipCategory.all.tint
-                        )
-                    }
-                    .buttonStyle(MenuActionButtonStyle(fill: Color.primary.opacity(0.055), layout: .compact))
-
                     Button {
                         store.toggleMenuQuickPasteMode()
                     } label: {
@@ -140,7 +107,9 @@ struct MenuBarView: View {
                     .buttonStyle(MenuActionButtonStyle(fill: Color.red.opacity(0.15), foreground: Color.red, layout: .footer))
                 }
             }
-            .blur(radius: inspectingItem == nil ? 0 : ClipFlowMotion.backgroundDefocusRadius)
+            .overlay(
+                Color.black.opacity(inspectingItem == nil ? 0 : 0.35)
+            )
 
             if let inspectingItem {
                 HUDInspectorOverlay(
@@ -174,6 +143,133 @@ struct MenuBarView: View {
         withAnimation(ClipFlowMotion.overlay) {
             inspectingItemID = inspectingItemID == item.id ? nil : item.id
         }
+    }
+
+    @ViewBuilder
+    private func menuTabButton(title: String, icon: String, tab: MenuBarTab, badge: String? = nil) -> some View {
+        let isActive = activeTab == tab
+        Button {
+            withAnimation(ClipFlowMotion.selection) {
+                activeTab = tab
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: icon)
+                    .font(.system(size: 10, weight: .semibold))
+                Text(title)
+                    .font(ClipFlowTypography.smallCaptionBold)
+                if let badge {
+                    Text(badge)
+                        .font(ClipFlowTypography.tinyBadge)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(ClipCategory.quickPaste.tint.opacity(0.2)))
+                }
+            }
+            .foregroundStyle(isActive ? .white : Color.secondary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(isActive ? ClipCategory.quickPaste.tint : Color.primary.opacity(0.055))
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private func recentTabContent(isDark: Bool) -> some View {
+        let recentItems = Array(store.recentItems.prefix(50))
+        if recentItems.isEmpty {
+            Text("先去其他应用复制文字或图片，这里会立刻出现最近条目。")
+                .font(ClipFlowTypography.caption)
+                .foregroundStyle(Color.secondary)
+                .padding(.horizontal, ClipFlowSpacing.xs)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        } else {
+            VStack(spacing: ClipFlowSpacing.sm) {
+                HStack {
+                    Text("最近内容")
+                        .font(ClipFlowTypography.captionBold)
+                    Spacer()
+                    Text(store.menuQuickPasteModeEnabled ? "左键复制，双击快贴，右键查看详情" : "左键复制，右键查看详情")
+                        .font(ClipFlowTypography.smallCaption)
+                        .foregroundStyle(Color.secondary)
+                }
+
+                clipList(items: recentItems, isDark: isDark, enableDoubleTap: true)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func pinnedTabContent(items: [ClipboardItem], isDark: Bool) -> some View {
+        if items.isEmpty {
+            VStack(alignment: .leading, spacing: ClipFlowSpacing.sm) {
+                Text("还没有置顶条目")
+                    .font(ClipFlowTypography.captionBold)
+                Text("在最近内容中右键选择条目，点击「加入快贴」即可置顶。置顶内容不会被自动清除。")
+                    .font(ClipFlowTypography.smallCaption)
+                    .foregroundStyle(Color.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.horizontal, ClipFlowSpacing.xs)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        } else {
+            VStack(spacing: ClipFlowSpacing.sm) {
+                HStack {
+                    Text("置顶条目")
+                        .font(ClipFlowTypography.captionBold)
+                    Spacer()
+                    Text("左键复制，右键查看详情")
+                        .font(ClipFlowTypography.smallCaption)
+                        .foregroundStyle(Color.secondary)
+                }
+
+                clipList(items: items, isDark: isDark, enableDoubleTap: store.menuQuickPasteModeEnabled)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func clipList(items: [ClipboardItem], isDark: Bool, enableDoubleTap: Bool) -> some View {
+        ScrollView {
+            LazyVStack(spacing: ClipFlowSpacing.sm) {
+                ForEach(items) { item in
+                    clipRowCard(item: item, isDark: isDark, enableDoubleTap: enableDoubleTap)
+                }
+            }
+        }
+        .frame(maxHeight: 340)
+    }
+
+    @ViewBuilder
+    private func clipRowCard(item: ClipboardItem, isDark: Bool, enableDoubleTap: Bool) -> some View {
+        let innerFill: Color = isDark ? Color.white.opacity(0.045) : Color.black.opacity(0.04)
+        let innerStroke: Color = isDark ? Color.white.opacity(0.08) : Color.black.opacity(0.06)
+        let outerFill: Color = isDark ? Color.white.opacity(0.03) : Color.black.opacity(0.03)
+        let innerCard = RoundedRectangle(cornerRadius: ClipFlowRadius.menuRow, style: .continuous)
+        let outerCard = RoundedRectangle(cornerRadius: ClipFlowRadius.menuRow + 2, style: .continuous)
+        let row = MenuRecentClipRow(item: item, snippet: store.displaySnippet(for: item), imagePreview: store.imagePreview(for: item), isRevealed: store.isRevealed(item))
+
+        let content = row.padding(2)
+            .background(innerCard.fill(innerFill))
+            .overlay(innerCard.stroke(innerStroke, lineWidth: 1))
+            .clipShape(innerCard)
+            .padding(2)
+            .background(outerCard.fill(outerFill))
+
+        InteractiveCard(
+            content: content,
+            onPrimary: { toggleMenuInspector(for: item) },
+            onDoubleTap: enableDoubleTap ? {
+                AppNavigationCenter.shared.toggleStatusBarMenu?()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    ClipFlowRuntime.shared.paste(item)
+                }
+            } : nil,
+            onSecondary: { toggleMenuInspector(for: item) }
+        )
     }
 }
 
@@ -323,7 +419,11 @@ struct MenuStatPill: View {
 struct MenuRecentClipRow: View {
     let item: ClipboardItem
     let snippet: String
-    @ObservedObject var store: ClipFlowStore
+    let imagePreview: NSImage?
+    let isRevealed: Bool
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var isDark: Bool { colorScheme == .dark }
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -359,7 +459,9 @@ struct MenuRecentClipRow: View {
 
                 if item.isImage {
                     ClipThumbnailView(
-                        store: store,
+                        image: imagePreview,
+                        isRevealed: isRevealed,
+                        privacyColor: item.privacy.color,
                         item: item,
                         height: 82,
                         cornerRadius: ClipFlowRadius.badge,
@@ -378,6 +480,16 @@ struct MenuRecentClipRow: View {
                 .font(ClipFlowTypography.smallCaptionBold)
                 .foregroundStyle(Color.secondary)
         }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .background(
+            RoundedRectangle(cornerRadius: ClipFlowRadius.menuRow, style: .continuous)
+                .fill(Color.white.opacity(isDark ? 0.06 : 0.50))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: ClipFlowRadius.menuRow, style: .continuous)
+                .stroke(Color.white.opacity(isDark ? 0.10 : 0.28), lineWidth: 1)
+        )
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

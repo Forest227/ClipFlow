@@ -13,10 +13,13 @@ struct SettingsView: View {
         let excludedAppsEditorFill = Color(nsColor: .textBackgroundColor)
 
         ZStack {
-            AppBackground(palette: palette)
+            AppBackground()
 
             ScrollView {
                 VStack(spacing: ClipFlowSpacing.cardPadding) {
+                    // Top padding for title bar height when using fullSizeContentView
+                    Spacer()
+                        .frame(height: 28)
                     FrostedPanel(palette: palette) {
                         VStack(alignment: .leading, spacing: ClipFlowSpacing.md) {
                             HStack(alignment: .top, spacing: ClipFlowSpacing.md) {
@@ -37,7 +40,7 @@ struct SettingsView: View {
                                 }
 
                                 VStack(alignment: .leading, spacing: 5) {
-                                    Text("ClipFlow 剪流设置")
+                                    Text("设置")
                                         .font(ClipFlowTypography.sectionTitle)
                                     Text("管理剪贴监听、隐私保护、开机启动与排除规则。")
                                         .font(ClipFlowTypography.caption)
@@ -101,7 +104,7 @@ struct SettingsView: View {
                                     icon: store.capturePaused ? "pause.fill" : "record.circle.fill",
                                     tint: store.capturePaused ? ClipCategory.protected.tint : Color.green,
                                     title: "暂停监听剪贴板",
-                                    detail: "关闭后不再记录新复制内容，但历史与快捷粘贴仍可继续使用。",
+                                    detail: "暂停记录新内容，历史与快捷粘贴不受影响。",
                                     isOn: $store.capturePaused,
                                     showsDivider: true
                                 )
@@ -109,8 +112,8 @@ struct SettingsView: View {
                                 SettingsToggleCard(
                                     icon: "lock.shield.fill",
                                     tint: ClipCategory.quickPaste.tint,
-                                    title: "自动保护疑似敏感内容",
-                                    detail: "检测到验证码、令牌或敏感命令时，默认使用更严格的隐私策略。",
+                                    title: "自动保护敏感内容",
+                                    detail: "验证码、密钥等自动加密保护。",
                                     isOn: $store.autoProtectSecrets,
                                     showsDivider: true
                                 )
@@ -119,7 +122,7 @@ struct SettingsView: View {
                                     icon: "power.circle.fill",
                                     tint: ClipCategory.links.tint,
                                     title: "开机自动启动",
-                                    detail: "登录 macOS 后自动启动 ClipFlow。建议将应用保留在「应用程序」文件夹中。",
+                                    detail: "登录后自动启动，建议保留在应用程序文件夹。",
                                     isOn: Binding(
                                         get: { store.launchAtLogin },
                                         set: { store.setLaunchAtLogin($0) }
@@ -128,22 +131,10 @@ struct SettingsView: View {
                                 )
 
                                 SettingsToggleCard(
-                                    icon: "menubar.rectangle",
-                                    tint: ClipCategory.all.tint,
-                                    title: "启动时直接驻留状态栏",
-                                    detail: "下次启动时不主动展示主窗口，只在状态栏中保持运行，需要时再从状态栏打开。",
-                                    isOn: Binding(
-                                        get: { store.launchToStatusBar },
-                                        set: { store.setLaunchToStatusBar($0) }
-                                    ),
-                                    showsDivider: true
-                                )
-
-                                SettingsToggleCard(
                                     icon: "dock.rectangle",
                                     tint: ClipCategory.smartStacks.tint,
-                                    title: "隐藏 Dock 应用图标",
-                                    detail: "开启后不会显示在 Dock 和应用切换器中，仍可通过状态栏图标或快捷键打开。",
+                                    title: "隐藏 Dock 图标",
+                                    detail: "通过状态栏图标或快捷键访问。",
                                     isOn: Binding(
                                         get: { store.hideDockIcon },
                                         set: { store.setHideDockIcon($0) }
@@ -195,14 +186,6 @@ struct SettingsView: View {
                                     title: "呼出状态栏菜单",
                                     config: $store.hotKeyStatusBar,
                                     defaultConfig: .statusBarDefault,
-                                    showsDivider: true
-                                )
-                                HotKeyRow(
-                                    icon: "rectangle.on.rectangle",
-                                    tint: ClipCategory.links.tint,
-                                    title: "打开主窗口",
-                                    config: $store.hotKeyLibrary,
-                                    defaultConfig: .libraryDefault,
                                     showsDivider: true
                                 )
                                 HotKeyRow(
@@ -259,7 +242,7 @@ struct SettingsView: View {
             }
             .scrollIndicators(.hidden)
         }
-        .frame(minWidth: 540, idealWidth: 540, minHeight: 600, idealHeight: 600)
+        .frame(minWidth: 380, idealWidth: 380, minHeight: 600, idealHeight: 600)
         .onAppear {
             excludedAppsText = store.excludedBundleIDs.joined(separator: "\n")
         }
@@ -426,13 +409,12 @@ struct SettingsToggleCard: View {
                         .foregroundStyle(tint)
                 }
 
-                VStack(alignment: .leading, spacing: 1) {
+                VStack(alignment: .leading, spacing: 2) {
                     Text(title)
-                        .font(ClipFlowTypography.bodyBold)
+                        .font(ClipFlowTypography.captionBold)
                     Text(detail)
-                        .font(ClipFlowTypography.badge)
+                        .font(ClipFlowTypography.smallCaption)
                         .foregroundStyle(Color.secondary)
-                        .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
@@ -444,7 +426,7 @@ struct SettingsToggleCard: View {
                     .controlSize(.small)
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, ClipFlowSpacing.sm)
+            .padding(.vertical, 16)
 
             if showsDivider {
                 Divider()
@@ -560,7 +542,7 @@ final class HotKeyRecorderNSView: NSView {
         NSLayoutConstraint.activate([
             label.centerXAnchor.constraint(equalTo: centerXAnchor),
             label.centerYAnchor.constraint(equalTo: centerYAnchor),
-            widthAnchor.constraint(greaterThanOrEqualToConstant: 80),
+            widthAnchor.constraint(greaterThanOrEqualToConstant: 120),
             heightAnchor.constraint(equalToConstant: 26)
         ])
         updateLabel()
@@ -568,7 +550,7 @@ final class HotKeyRecorderNSView: NSView {
 
     private func updateLabel() {
         if isRecording {
-            label.stringValue = "录制中…"
+            label.stringValue = "录制中… 按 ESC 取消"
             label.textColor = NSColor.controlAccentColor
             layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.12).cgColor
             layer?.borderColor = NSColor.controlAccentColor.withAlphaComponent(0.6).cgColor
@@ -592,6 +574,14 @@ final class HotKeyRecorderNSView: NSView {
 
     override func keyDown(with event: NSEvent) {
         guard isRecording else { super.keyDown(with: event); return }
+
+        // ESC cancels recording, restoring the previous config
+        if event.keyCode == 53 {
+            isRecording = false
+            updateLabel()
+            window?.makeFirstResponder(nil)
+            return
+        }
 
         let flags = event.modifierFlags.intersection([.command, .option, .shift, .control])
         guard !flags.isEmpty else { return }

@@ -7,17 +7,12 @@ import SwiftUI
 final class AppNavigationCenter {
     static let shared = AppNavigationCenter()
 
-    var openLibraryWindow: (() -> Void)?
     var openSettingsWindow: (() -> Void)?
+    var openLibraryWindow: (() -> Void)?
     var toggleStatusBarMenu: (() -> Void)?
-    var openLibraryKeepingPopover: (() -> Void)?
     var openSettingsKeepingPopover: (() -> Void)?
 
     private init() {}
-
-    func openLibrary() {
-        ClipFlowRuntime.shared.openLibrary()
-    }
 
     func openSettings() {
         if let openSettingsWindow {
@@ -54,9 +49,6 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
         AppNavigationCenter.shared.toggleStatusBarMenu = { [weak self] in
             self?.togglePopoverViaHotKey()
         }
-        AppNavigationCenter.shared.openLibraryKeepingPopover = { [weak self] in
-            (self as StatusBarController?)?.openLibraryKeepingPopover()
-        }
         AppNavigationCenter.shared.openSettingsKeepingPopover = { [weak self] in
             (self as StatusBarController?)?.openSettingsKeepingPopover()
         }
@@ -79,9 +71,21 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
         popover.animates = false
         popover.delegate = self
         popover.contentSize = NSSize(width: 348, height: 620)
-        popover.contentViewController = NSHostingController(
-            rootView: PopoverRoot(store: store)
-        )
+
+        let hostingController = NSHostingController(rootView: PopoverRoot(store: store))
+        hostingController.view.wantsLayer = true
+        hostingController.view.layer?.masksToBounds = true
+        hostingController.view.layer?.cornerRadius = 0
+        popover.contentViewController = hostingController
+        applyPopoverBackground()
+    }
+
+    private func applyPopoverBackground() {
+        let isDark = store.appearanceMode.preferredColorScheme == .dark
+        let nsColor: NSColor = isDark
+            ? NSColor(red: 0.11, green: 0.12, blue: 0.16, alpha: 1)
+            : NSColor(red: 1.0, green: 1.0, blue: 1.0, alpha: 1)
+        popover.contentViewController?.view.layer?.backgroundColor = nsColor.cgColor
     }
 
     private func bindStore() {
@@ -89,6 +93,13 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
                 self?.updateButtonImage()
+            }
+            .store(in: &cancellables)
+
+        store.$appearanceMode
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.applyPopoverBackground()
             }
             .store(in: &cancellables)
     }
@@ -125,17 +136,6 @@ final class StatusBarController: NSObject, NSPopoverDelegate {
             button.isHighlighted = true
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             startPopoverEventMonitors()
-        }
-    }
-
-    func openLibraryKeepingPopover() {
-        stopPopoverEventMonitors()
-        AppNavigationCenter.shared.openLibraryWindow?()
-        NSApp.activate(ignoringOtherApps: true)
-        NSApp.windows.first(where: { !($0 is NSPanel) })?.makeKeyAndOrderFront(nil)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-            guard let self, self.popover.isShown else { return }
-            self.startPopoverEventMonitors()
         }
     }
 
@@ -215,7 +215,7 @@ private struct PopoverRoot: View {
 
     private var bgColor: Color {
         colorScheme == .light
-            ? Color(red: 0.94, green: 0.94, blue: 0.95)
+            ? Color(red: 1.0, green: 1.0, blue: 1.0)
             : Color(red: 0.11, green: 0.12, blue: 0.16)
     }
 

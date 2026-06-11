@@ -140,6 +140,86 @@ struct ClipboardItem: Identifiable, Hashable, Codable {
     var imageWidth: Double?
     var imageHeight: Double?
     var imageSignature: String?
+    /// Pre-lowered concatenation of searchable fields — computed once at creation to avoid
+    /// repeated .lowercased() calls on every search keystroke.
+    var searchKey: String = ""
+
+    enum CodingKeys: String, CodingKey {
+        case id, title, snippet, fullText, sourceApp, sourceBundleID, createdAt
+        case kind, privacy, labels, pinned, localOnly, autoExpire, pasteTargets
+        case expiresAt, imageFilename, imageWidth, imageHeight, imageSignature
+        // searchKey is intentionally excluded from Codable — recomputed on decode
+    }
+
+    init(
+        id: UUID, title: String, snippet: String, fullText: String,
+        sourceApp: String, sourceBundleID: String? = nil, createdAt: Date,
+        kind: ClipboardKind, privacy: PrivacyLevel, labels: [String],
+        pinned: Bool, localOnly: Bool, autoExpire: Bool, pasteTargets: [String],
+        expiresAt: Date? = nil, imageFilename: String? = nil,
+        imageWidth: Double? = nil, imageHeight: Double? = nil,
+        imageSignature: String? = nil, searchKey: String = ""
+    ) {
+        self.id = id; self.title = title; self.snippet = snippet; self.fullText = fullText
+        self.sourceApp = sourceApp; self.sourceBundleID = sourceBundleID; self.createdAt = createdAt
+        self.kind = kind; self.privacy = privacy; self.labels = labels
+        self.pinned = pinned; self.localOnly = localOnly; self.autoExpire = autoExpire
+        self.pasteTargets = pasteTargets; self.expiresAt = expiresAt
+        self.imageFilename = imageFilename; self.imageWidth = imageWidth
+        self.imageHeight = imageHeight; self.imageSignature = imageSignature
+        self.searchKey = searchKey
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        snippet = try container.decode(String.self, forKey: .snippet)
+        fullText = try container.decode(String.self, forKey: .fullText)
+        sourceApp = try container.decode(String.self, forKey: .sourceApp)
+        sourceBundleID = try container.decodeIfPresent(String.self, forKey: .sourceBundleID)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        kind = try container.decode(ClipboardKind.self, forKey: .kind)
+        privacy = try container.decode(PrivacyLevel.self, forKey: .privacy)
+        labels = try container.decode([String].self, forKey: .labels)
+        pinned = try container.decode(Bool.self, forKey: .pinned)
+        localOnly = try container.decode(Bool.self, forKey: .localOnly)
+        autoExpire = try container.decode(Bool.self, forKey: .autoExpire)
+        pasteTargets = try container.decode([String].self, forKey: .pasteTargets)
+        expiresAt = try container.decodeIfPresent(Date.self, forKey: .expiresAt)
+        imageFilename = try container.decodeIfPresent(String.self, forKey: .imageFilename)
+        imageWidth = try container.decodeIfPresent(Double.self, forKey: .imageWidth)
+        imageHeight = try container.decodeIfPresent(Double.self, forKey: .imageHeight)
+        imageSignature = try container.decodeIfPresent(String.self, forKey: .imageSignature)
+        searchKey = Self.buildSearchKey(title: title, snippet: snippet, fullText: fullText, sourceApp: sourceApp, labels: labels)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(title, forKey: .title)
+        try container.encode(snippet, forKey: .snippet)
+        try container.encode(fullText, forKey: .fullText)
+        try container.encode(sourceApp, forKey: .sourceApp)
+        try container.encodeIfPresent(sourceBundleID, forKey: .sourceBundleID)
+        try container.encode(createdAt, forKey: .createdAt)
+        try container.encode(kind, forKey: .kind)
+        try container.encode(privacy, forKey: .privacy)
+        try container.encode(labels, forKey: .labels)
+        try container.encode(pinned, forKey: .pinned)
+        try container.encode(localOnly, forKey: .localOnly)
+        try container.encode(autoExpire, forKey: .autoExpire)
+        try container.encode(pasteTargets, forKey: .pasteTargets)
+        try container.encodeIfPresent(expiresAt, forKey: .expiresAt)
+        try container.encodeIfPresent(imageFilename, forKey: .imageFilename)
+        try container.encodeIfPresent(imageWidth, forKey: .imageWidth)
+        try container.encodeIfPresent(imageHeight, forKey: .imageHeight)
+        try container.encodeIfPresent(imageSignature, forKey: .imageSignature)
+    }
+
+    fileprivate static func buildSearchKey(title: String, snippet: String, fullText: String, sourceApp: String, labels: [String]) -> String {
+        (title + " " + snippet + " " + fullText + " " + sourceApp + " " + labels.joined(separator: " ")).lowercased()
+    }
 
     nonisolated(unsafe) private static let timeFormatter: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
@@ -187,7 +267,7 @@ struct ClipboardItem: Identifiable, Hashable, Codable {
         return URL(string: sourceText)
     }
 
-    private static let linkDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+    fileprivate static let linkDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
 }
 
 struct FlowMetric: Identifiable {
@@ -279,7 +359,7 @@ enum ClipboardClassifier {
     static func privacy(for text: String, kind: ClipboardKind, sourceBundleID: String?, autoProtectSecrets: Bool) -> PrivacyLevel {
         let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let lowered = normalized.lowercased()
-        let codeLike = kind == .code || looksLikeCode(normalized)
+        let codeLike = kind == .code
         let sensitiveSource = (sourceBundleID.map(sensitiveSourceBundleIDs.contains) ?? false)
         let secretLike = looksLikeSecretPayload(normalized, lowered: lowered, codeLike: codeLike)
 
@@ -393,10 +473,7 @@ enum ClipboardClassifier {
             autoExpire: autoExpire,
             pasteTargets: pasteTargets,
             expiresAt: autoExpire ? Date().addingTimeInterval(kind == .secret ? 120 : 900) : nil,
-            imageFilename: nil,
-            imageWidth: nil,
-            imageHeight: nil,
-            imageSignature: nil
+            searchKey: ClipboardItem.buildSearchKey(title: title, snippet: snippet, fullText: normalized, sourceApp: sourceApp, labels: labels)
         )
     }
 
@@ -409,27 +486,30 @@ enum ClipboardClassifier {
         existingItem: ClipboardItem?
     ) -> ClipboardItem {
         let privacy = imagePrivacy(sourceBundleID: sourceBundleID)
+        let title = makeImageTitle(for: imageSize)
+        let snippet = makeImageSnippet(for: imageSize)
+        let labels = imageLabels(for: imageSize, sourceApp: sourceApp, privacy: privacy)
 
         return ClipboardItem(
             id: existingItem?.id ?? UUID(),
-            title: makeImageTitle(for: imageSize),
-            snippet: makeImageSnippet(for: imageSize),
+            title: title,
+            snippet: snippet,
             fullText: "",
             sourceApp: sourceApp,
             sourceBundleID: sourceBundleID,
             createdAt: Date(),
             kind: .image,
             privacy: privacy,
-            labels: imageLabels(for: imageSize, sourceApp: sourceApp, privacy: privacy),
+            labels: labels,
             pinned: existingItem?.pinned ?? false,
             localOnly: privacy != .standard,
             autoExpire: false,
             pasteTargets: pasteTargets(for: .image),
-            expiresAt: nil,
             imageFilename: imageFilename,
             imageWidth: imageSize.width,
             imageHeight: imageSize.height,
-            imageSignature: imageSignature
+            imageSignature: imageSignature,
+            searchKey: ClipboardItem.buildSearchKey(title: title, snippet: snippet, fullText: "", sourceApp: sourceApp, labels: labels)
         )
     }
 
@@ -443,10 +523,7 @@ enum ClipboardClassifier {
     ]
 
     private static func looksLikeURL(_ text: String) -> Bool {
-        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else {
-            return false
-        }
-
+        guard let detector = ClipboardItem.linkDetector else { return false }
         let range = NSRange(location: 0, length: text.utf16.count)
         return detector.firstMatch(in: text, options: [], range: range)?.url != nil
     }
@@ -910,9 +987,6 @@ final class ClipFlowStore: ObservableObject {
         didSet { defaults.set(autoProtectSecrets, forKey: Keys.autoProtectSecrets) }
     }
     @Published var launchAtLogin: Bool
-    @Published var launchToStatusBar: Bool {
-        didSet { defaults.set(launchToStatusBar, forKey: Keys.launchToStatusBar) }
-    }
     @Published var hideDockIcon: Bool {
         didSet { defaults.set(hideDockIcon, forKey: Keys.hideDockIcon) }
     }
@@ -944,6 +1018,7 @@ final class ClipFlowStore: ObservableObject {
     @Published private(set) var items: [ClipboardItem] = [] {
         didSet {
             invalidateDerivedCaches()
+            rebuildItemsIndex()
             schedulePersistItems()
             ensureSelectionStillValid()
             if iCloudSyncEnabled && !isApplyingCloudSnapshot {
@@ -959,8 +1034,8 @@ final class ClipFlowStore: ObservableObject {
     private let fileManager = FileManager.default
     private let persistenceQueue = DispatchQueue(label: "ClipFlow.persistence", qos: .utility)
     private let imagePreviewCache = NSCache<NSString, NSImage>()
-    /// Maximum memory budget for cached thumbnails: 100 MB
-    private static let imageCacheTotalCostLimit = 100_000_000
+    /// Maximum memory budget for cached thumbnails: 60 MB
+    private static let imageCacheTotalCostLimit = 60_000_000
     private let historyURL: URL
     private let imagesDirectoryURL: URL
     private let cloudSyncCoordinator: ClipFlowCloudSyncCoordinator
@@ -979,6 +1054,8 @@ final class ClipFlowStore: ObservableObject {
     private var _recentItemsCache: [ClipboardItem]?
     private var _quickPasteItemsCache: [ClipboardItem]?
     private var _metricsCache: [FlowMetric]?
+    private var _categoryCountsCache: [ClipCategory: Int]?
+    private var _itemsByID: [UUID: ClipboardItem] = [:]
 
     private func invalidateDerivedCaches() {
         _sortedItemsCache = nil
@@ -986,6 +1063,16 @@ final class ClipFlowStore: ObservableObject {
         _recentItemsCache = nil
         _quickPasteItemsCache = nil
         _metricsCache = nil
+        _categoryCountsCache = nil
+    }
+
+    private func rebuildItemsIndex() {
+        var dict = [UUID: ClipboardItem]()
+        dict.reserveCapacity(items.count)
+        for item in items {
+            dict[item.id] = item
+        }
+        _itemsByID = dict
     }
 
     private init() {
@@ -1004,7 +1091,6 @@ final class ClipFlowStore: ObservableObject {
         capturePaused = defaults.object(forKey: Keys.capturePaused) as? Bool ?? false
         autoProtectSecrets = defaults.object(forKey: Keys.autoProtectSecrets) as? Bool ?? true
         launchAtLogin = Self.currentLaunchAtLoginState()
-        launchToStatusBar = defaults.object(forKey: Keys.launchToStatusBar) as? Bool ?? false
         hideDockIcon = defaults.object(forKey: Keys.hideDockIcon) as? Bool ?? false
         menuQuickPasteModeEnabled = defaults.object(forKey: Keys.menuQuickPasteModeEnabled) as? Bool ?? true
         iCloudSyncEnabled = defaults.object(forKey: Keys.iCloudSyncEnabled) as? Bool ?? false
@@ -1016,6 +1102,7 @@ final class ClipFlowStore: ObservableObject {
         iCloudLastSyncedAt = defaults.object(forKey: Keys.iCloudLastSyncedAt) as? Date
         localSyncTombstones = Self.decodeTombstones(from: defaults.data(forKey: Keys.iCloudSyncTombstones))
         items = loadItems()
+        rebuildItemsIndex()
         cleanupOrphanedImageFiles()
         selectedItemID = items.first?.id
         runStartupPermissionCheck()
@@ -1040,13 +1127,7 @@ final class ClipFlowStore: ObservableObject {
         if query.isEmpty {
             result = base
         } else {
-            result = base.filter { item in
-                item.title.lowercased().contains(query)
-                    || item.snippet.lowercased().contains(query)
-                    || item.fullText.lowercased().contains(query)
-                    || item.sourceApp.lowercased().contains(query)
-                    || item.labels.joined(separator: " ").lowercased().contains(query)
-            }
+            result = base.filter { $0.searchKey.contains(query) }
         }
 
         _filteredItemsCache = result
@@ -1065,9 +1146,16 @@ final class ClipFlowStore: ObservableObject {
     var metrics: [FlowMetric] {
         if let cached = _metricsCache { return cached }
 
-        let protectedCount = items.filter(\.isSensitive).count
-        let codeCount = items.filter { $0.kind == .code }.count
-        let stackCount = Set(items.flatMap(\.labels)).count
+        // Single pass instead of 3 separate filter/flatMap operations
+        var protectedCount = 0
+        var codeCount = 0
+        var allLabels = Set<String>()
+        for item in items {
+            if item.isSensitive { protectedCount += 1 }
+            if item.kind == .code { codeCount += 1 }
+            allLabels.formUnion(item.labels)
+        }
+        let stackCount = allLabels.count
 
         let result: [FlowMetric] = [
             FlowMetric(
@@ -1114,11 +1202,30 @@ final class ClipFlowStore: ObservableObject {
     }
 
     func count(for category: ClipCategory) -> Int {
-        sortedItems.filter { matchesSelectedCategory($0, category: category) }.count
+        if let cached = _categoryCountsCache?[category] { return cached }
+
+        // Single pass through items instead of 6 separate filter passes
+        var counts = [ClipCategory: Int]()
+        for cat in ClipCategory.allCases { counts[cat] = 0 }
+
+        let now = Date()
+        for item in items {
+            counts[.all, default: 0] += 1
+            if item.pinned || item.createdAt > now.addingTimeInterval(-900) {
+                counts[.quickPaste, default: 0] += 1
+            }
+            if item.labels.count >= 3 { counts[.smartStacks, default: 0] += 1 }
+            if item.kind == .code { counts[.code, default: 0] += 1 }
+            if item.kind == .link { counts[.links, default: 0] += 1 }
+            if item.isSensitive { counts[.protected, default: 0] += 1 }
+        }
+
+        _categoryCountsCache = counts
+        return counts[category] ?? 0
     }
 
     func item(withID id: UUID) -> ClipboardItem? {
-        items.first { $0.id == id }
+        _itemsByID[id]
     }
 
     func select(_ item: ClipboardItem) {
@@ -1178,7 +1285,7 @@ final class ClipFlowStore: ObservableObject {
         lastCaptureStatus = "已从 \(sourceApp) 捕获新内容"
     }
 
-    func ingestCopiedImage(_ imageData: Data, size: CGSize, sourceApp: String, sourceBundleID: String?, previewThumbnail: NSImage? = nil) {
+    func ingestCopiedImage(_ imageData: Data, size: CGSize, fileExtension: String = "png", sourceApp: String, sourceBundleID: String?, previewThumbnail: NSImage? = nil) {
         guard !imageData.isEmpty else { return }
         guard imageData.count <= 25_000_000 else {
             lastCaptureStatus = "已跳过过大的图片"
@@ -1187,13 +1294,22 @@ final class ClipFlowStore: ObservableObject {
 
         purgeExpired()
 
-        let signature = SHA256.hash(data: imageData)
-            .map { String(format: "%02x", $0) }
-            .joined()
+        let hash = SHA256.hash(data: imageData)
+        let signature = String(unsafeUninitializedCapacity: 64) { buf in
+            var i = 0
+            for byte in hash {
+                let lo = byte & 0x0F
+                let hi = byte >> 4
+                buf[i] = hi < 10 ? hi + 48 : hi + 87
+                buf[i + 1] = lo < 10 ? lo + 48 : lo + 87
+                i += 2
+            }
+            return 64
+        }
         let existingIndex = items.firstIndex { $0.imageSignature == signature }
         let existing = existingIndex.map { items.remove(at: $0) }
         let itemID = existing?.id ?? UUID()
-        let imageFilename = "\(itemID.uuidString).png"
+        let imageFilename = "\(itemID.uuidString).\(fileExtension)"
         let imageURL = imagesDirectoryURL.appendingPathComponent(imageFilename)
 
         do {
@@ -1271,11 +1387,6 @@ final class ClipFlowStore: ObservableObject {
             launchAtLogin = Self.currentLaunchAtLoginState()
             lastCaptureStatus = "开机自动启动设置失败，请将 ClipFlow 放在应用程序目录后再试"
         }
-    }
-
-    func setLaunchToStatusBar(_ enabled: Bool) {
-        launchToStatusBar = enabled
-        lastCaptureStatus = enabled ? "启动后将直接驻留状态栏" : "启动后将显示主窗口"
     }
 
     func setHideDockIcon(_ enabled: Bool) {
@@ -1413,13 +1524,7 @@ final class ClipFlowStore: ObservableObject {
             return base
         }
 
-        return base.filter { item in
-            item.title.lowercased().contains(normalized)
-                || item.snippet.lowercased().contains(normalized)
-                || item.fullText.lowercased().contains(normalized)
-                || item.sourceApp.lowercased().contains(normalized)
-                || item.labels.joined(separator: " ").lowercased().contains(normalized)
-        }
+        return base.filter { $0.searchKey.contains(normalized) }
     }
 
     var protectedCount: Int {
@@ -1800,7 +1905,6 @@ final class ClipFlowStore: ObservableObject {
         static let capturePaused = "capturePaused"
         static let autoProtectSecrets = "autoProtectSecrets"
         static let launchAtLogin = "launchAtLogin"
-        static let launchToStatusBar = "launchToStatusBar"
         static let hideDockIcon = "hideDockIcon"
         static let menuQuickPasteModeEnabled = "menuQuickPasteModeEnabled"
         static let iCloudSyncEnabled = "iCloudSyncEnabled"

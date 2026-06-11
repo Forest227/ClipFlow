@@ -7,35 +7,106 @@ import UniformTypeIdentifiers
 private struct CapturedImagePayload {
     let data: Data
     let size: CGSize
+    /// File extension for the stored image ("png" or "jpg")
+    let fileExtension: String
     /// A thumbnail-sized NSImage created during capture, used for cache insertion.
-    /// This avoids re-loading the full PNG from disk and creating a second NSImage later.
+    /// This avoids re-loading the full image from disk and creating a second NSImage later.
     let previewThumbnail: NSImage?
 }
 
 private extension NSImage {
-    /// Convert pasteboard image to PNG payload while also producing a lightweight thumbnail for caching.
+    /// Maximum pixel dimension for stored images — larger images are downsampled before encoding
+    static let maxStoreDimension: CGFloat = 4096
+
+    /// Convert pasteboard image to a compressed payload while also producing a lightweight thumbnail for caching.
+    /// Uses JPEG (quality 0.8) for opaque photos to reduce file size, PNG for images with alpha.
     /// Using autoreleasepool ensures intermediate representations (tiff, bitmap) are released promptly.
-    func clipFlowPNGPayload() -> CapturedImagePayload? {
-        let payload: CapturedImagePayload? = autoreleasepool {
+    func clipFlowCompressedPayload() -> CapturedImagePayload? {
+        let payload: CapturedImagePayload? = autoreleasepool { () -> CapturedImagePayload? in
             guard let tiffRepresentation,
-                  let bitmap = NSBitmapImageRep(data: tiffRepresentation),
-                  let pngData = bitmap.representation(using: .png, properties: [:]) else {
+                  let originalBitmap = NSBitmapImageRep(data: tiffRepresentation) else {
                 return nil
             }
 
-            let pixelSize = CGSize(width: bitmap.pixelsWide, height: bitmap.pixelsHigh)
+            let originalPixelSize = CGSize(width: originalBitmap.pixelsWide, height: originalBitmap.pixelsHigh)
+            // Capture alpha state from the original bitmap BEFORE scaling,
+            // because scaled bitmaps always have hasAlpha=true regardless of source
+            let originalHasAlpha = originalBitmap.hasAlpha
 
-            // Create thumbnail at display size so the cache only holds lightweight images
-            let thumbnail: NSImage
-            if max(pixelSize.width, pixelSize.height) > ClipFlowThumbnail.maxDimension {
-                thumbnail = ClipFlowThumbnail.downsample(self)
+            // Downsample if the image exceeds the storage dimension cap
+            let bitmap: NSBitmapImageRep
+            let pixelSize: CGSize
+            if max(originalPixelSize.width, originalPixelSize.height) > Self.maxStoreDimension {
+                let scale = Self.maxStoreDimension / max(originalPixelSize.width, originalPixelSize.height)
+                let targetW = Int(ceil(originalPixelSize.width * scale))
+                let targetH = Int(ceil(originalPixelSize.height * scale))
+                guard let scaled = NSBitmapImageRep(
+                    bitmapDataPlanes: nil,
+                    pixelsWide: targetW,
+                    pixelsHigh: targetH,
+                    bitsPerSample: 8,
+                    samplesPerPixel: 4,
+                    hasAlpha: true,
+                    isPlanar: false,
+                    colorSpaceName: .calibratedRGB,
+                    bytesPerRow: 0,
+                    bitsPerPixel: 0
+                ) else {
+                    // Fallback to original if scaling fails
+                    return encodeBitmap(originalBitmap, pixelSize: originalPixelSize, hasAlpha: originalHasAlpha, sourceImage: self)
+                }
+                scaled.size = NSSize(width: targetW, height: targetH)
+                NSGraphicsContext.saveGraphicsState()
+                NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: scaled)
+                self.draw(
+                    in: NSRect(origin: .zero, size: NSSize(width: targetW, height: targetH)),
+                    from: NSRect(origin: .zero, size: self.size),
+                    operation: .copy,
+                    fraction: 1.0
+                )
+                NSGraphicsContext.restoreGraphicsState()
+                bitmap = scaled
+                pixelSize = CGSize(width: targetW, height: targetH)
             } else {
-                thumbnail = self
+                bitmap = originalBitmap
+                pixelSize = originalPixelSize
             }
 
-            return CapturedImagePayload(data: pngData, size: pixelSize, previewThumbnail: thumbnail)
+            return encodeBitmap(bitmap, pixelSize: pixelSize, hasAlpha: originalHasAlpha, sourceImage: self)
         }
         return payload
+    }
+
+    /// Encode a bitmap to JPEG (if opaque) or PNG (if has alpha).
+    /// Uses the original image's alpha state rather than the scaled bitmap's format,
+    /// since scaled bitmaps always report hasAlpha=true regardless of source.
+    private func encodeBitmap(_ bitmap: NSBitmapImageRep, pixelSize: CGSize, hasAlpha: Bool, sourceImage: NSImage) -> CapturedImagePayload? {
+        // Create thumbnail at display size so the cache only holds lightweight images
+        let thumbnail: NSImage
+        if max(pixelSize.width, pixelSize.height) > ClipFlowThumbnail.maxDimension {
+            thumbnail = ClipFlowThumbnail.downsample(sourceImage)
+        } else {
+            thumbnail = sourceImage
+        }
+
+        // JPEG for opaque images — typically 3-10x smaller than PNG for photos
+        if !hasAlpha {
+            if let jpgData = bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.8]) {
+                return CapturedImagePayload(data: jpgData, size: pixelSize, fileExtension: "jpg", previewThumbnail: thumbnail)
+            }
+        }
+
+        // PNG for images with alpha, or as fallback
+        if let pngData = bitmap.representation(using: .png, properties: [:]) {
+            return CapturedImagePayload(data: pngData, size: pixelSize, fileExtension: "png", previewThumbnail: thumbnail)
+        }
+
+        // Alpha image where PNG encoding failed — try JPEG as last resort (loses alpha)
+        if let jpgData = bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.8]) {
+            return CapturedImagePayload(data: jpgData, size: pixelSize, fileExtension: "jpg", previewThumbnail: thumbnail)
+        }
+
+        return nil
     }
 }
 
@@ -57,8 +128,6 @@ final class ClipFlowRuntime: NSObject {
     private let pasteService: PasteService
     private lazy var hudController = QuickPastePanelController(store: store) { [weak self] item in
         self?.paste(item)
-    } onOpenLibrary: { [weak self] in
-        self?.openLibrary()
     }
     private let hotKeyController = HotKeyController()
     private var cancellables = Set<AnyCancellable>()
@@ -90,7 +159,6 @@ final class ClipFlowRuntime: NSObject {
         hotKeyController.start(configs: [
             .init(id: 1, config: store.hotKeyQuickPaste, action: { [weak self] in self?.toggleHUD() }),
             .init(id: 2, config: store.hotKeyStatusBar,  action: { [weak self] in self?.toggleStatusBarMenu() }),
-            .init(id: 3, config: store.hotKeyLibrary,    action: { [weak self] in self?.openLibrary() }),
             .init(id: 4, config: store.hotKeySettings,   action: { [weak self] in self?.openSettings() })
         ])
     }
@@ -99,10 +167,9 @@ final class ClipFlowRuntime: NSObject {
         Publishers.MergeMany(
             store.$hotKeyQuickPaste.map { _ in () },
             store.$hotKeyStatusBar.map  { _ in () },
-            store.$hotKeyLibrary.map    { _ in () },
             store.$hotKeySettings.map   { _ in () }
         )
-        .dropFirst(4)
+        .dropFirst(3)
         .debounce(for: .milliseconds(200), scheduler: RunLoop.main)
         .sink { [weak self] in self?.registerHotKeys() }
         .store(in: &cancellables)
@@ -131,22 +198,6 @@ final class ClipFlowRuntime: NSObject {
 
     func copyToClipboard(_ item: ClipboardItem) {
         pasteService.copyToClipboard(item)
-    }
-
-    func openLibrary() {
-        hudController.hide()
-        AppNavigationCenter.shared.openLibraryWindow?()
-        NSApp.activate(ignoringOtherApps: true)
-
-        if let libraryWindow = NSApp.windows.first(where: { !($0 is NSPanel) }) {
-            libraryWindow.makeKeyAndOrderFront(nil)
-        } else {
-            DispatchQueue.main.async {
-                NSApp.windows
-                    .first(where: { !($0 is NSPanel) })?
-                    .makeKeyAndOrderFront(nil)
-            }
-        }
     }
 
     func toggleStatusBarMenu() {
@@ -273,6 +324,7 @@ final class ClipboardMonitor {
             store.ingestCopiedImage(
                 imagePayload.data,
                 size: imagePayload.size,
+                fileExtension: imagePayload.fileExtension,
                 sourceApp: frontmostApp?.localizedName ?? "未知应用",
                 sourceBundleID: sourceBundleID,
                 previewThumbnail: imagePayload.previewThumbnail
@@ -291,7 +343,7 @@ final class ClipboardMonitor {
 
     private func imagePayloadFromPasteboard() -> CapturedImagePayload? {
         if let image = NSImage(pasteboard: pasteboard),
-           let payload = image.clipFlowPNGPayload() {
+           let payload = image.clipFlowCompressedPayload() {
             return payload
         }
 
@@ -304,7 +356,7 @@ final class ClipboardMonitor {
            let type = UTType(filenameExtension: fileURL.pathExtension),
            type.conforms(to: .image),
            let image = NSImage(contentsOf: fileURL),
-           let payload = image.clipFlowPNGPayload() {
+           let payload = image.clipFlowCompressedPayload() {
             return payload
         }
 
@@ -471,13 +523,11 @@ final class HotKeyController {
 final class QuickPastePanelController: NSObject, NSWindowDelegate {
     private let store: ClipFlowStore
     private let onPaste: (ClipboardItem) -> Void
-    private let onOpenLibrary: () -> Void
     private var panel: QuickPastePanel?
 
-    init(store: ClipFlowStore, onPaste: @escaping (ClipboardItem) -> Void, onOpenLibrary: @escaping () -> Void) {
+    init(store: ClipFlowStore, onPaste: @escaping (ClipboardItem) -> Void) {
         self.store = store
         self.onPaste = onPaste
-        self.onOpenLibrary = onOpenLibrary
     }
 
     func toggle(anchorAt mouseLocation: CGPoint, preferredTarget: NSRunningApplication?) {
@@ -496,7 +546,6 @@ final class QuickPastePanelController: NSObject, NSWindowDelegate {
                 store: store,
                 preferredTargetName: preferredTarget?.localizedName,
                 onPaste: onPaste,
-                onOpenLibrary: onOpenLibrary,
                 onClose: { [weak self] in
                     self?.hide()
                 }
@@ -537,7 +586,7 @@ final class QuickPastePanelController: NSObject, NSWindowDelegate {
 
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.hasShadow = false
+        panel.hasShadow = true
         panel.level = .statusBar
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
@@ -641,22 +690,27 @@ final class QuickPastePanel: NSPanel {
     }
 }
 
+private enum PanelTab {
+    case recent
+    case pinned
+}
+
 struct QuickPastePanelView: View {
     @ObservedObject var store: ClipFlowStore
     let preferredTargetName: String?
     let onPaste: (ClipboardItem) -> Void
-    let onOpenLibrary: () -> Void
     let onClose: () -> Void
 
     @State private var query = ""
     @State private var selectedItemID: UUID?
     @State private var inspectingItemID: UUID?
+    @State private var activeTab: PanelTab = .recent
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         let palette = ClipFlowPalette.resolve(for: colorScheme)
         let isDark = colorScheme == .dark
-        let clips = store.hudItems(matching: query)
+        let clips = activeTab == .recent ? store.hudItems(matching: query) : store.items.filter(\.pinned)
 
         ZStack {
             VStack(alignment: .leading, spacing: ClipFlowSpacing.md) {
@@ -666,31 +720,31 @@ struct QuickPastePanelView: View {
 
                     Spacer()
 
+                    Text("↑↓ 导航 · Enter 粘贴")
+                        .font(ClipFlowTypography.tinyBadge)
+                        .foregroundStyle(Color.secondary)
+
                     Button("关闭", action: onClose)
                         .buttonStyle(ClipFlowButtonStyle(fill: palette.secondaryButtonFill, size: .compact))
                 }
 
-                HStack(spacing: ClipFlowSpacing.sm) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(Color.secondary)
-
-                    TextField("搜索最近内容", text: $query)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 12, weight: .medium))
+                // Tab bar
+                HStack(spacing: ClipFlowSpacing.xs) {
+                    tabButton(title: "最近", icon: "clock", tab: .recent, palette: palette)
+                    tabButton(title: "置顶", icon: "pin", tab: .pinned, palette: palette)
                 }
-                .padding(.horizontal, ClipFlowSpacing.inputPaddingH)
-                .padding(.vertical, ClipFlowSpacing.inputPaddingV)
-                .background(
-                    RoundedRectangle(cornerRadius: ClipFlowRadius.menuButton, style: .continuous)
-                        .fill(palette.inputFill)
-                )
+
+                if activeTab == .recent {
+                    searchBar(palette: palette)
+                }
 
                 if clips.isEmpty {
                     VStack(alignment: .leading, spacing: ClipFlowSpacing.sm) {
-                        Text("还没有捕获到内容")
+                        Text(activeTab == .recent ? "还没有捕获到内容" : "还没有置顶条目")
                             .font(ClipFlowTypography.sectionTitle)
-                        Text("先去其他应用复制文字或图片，然后按下 Option + V，就能在指针附近把它调出来。")
+                        Text(activeTab == .recent
+                            ? "先去其他应用复制文字或图片，然后按下 Option + V，就能在指针附近把它调出来。"
+                            : "在最近内容中右键选择条目，点击「加入快贴」即可置顶。置顶内容不会被自动清除。")
                             .font(ClipFlowTypography.caption)
                             .foregroundStyle(Color.secondary)
                     }
@@ -701,11 +755,8 @@ struct QuickPastePanelView: View {
                         LazyVStack(spacing: ClipFlowSpacing.sm) {
                             ForEach(clips) { item in
                                 InteractiveCard(
-                                    content: HUDRow(item: item, store: store, isSelected: selectedItemID == item.id),
+                                    content: hudRowCard(item: item, isDark: isDark),
                                     onPrimary: {
-                                        selectedItemID = item.id
-                                    },
-                                    onDoubleTap: {
                                         selectedItemID = item.id
                                         onClose()
                                         onPaste(item)
@@ -724,12 +775,6 @@ struct QuickPastePanelView: View {
                 }
 
                 HStack(spacing: ClipFlowSpacing.sm) {
-                    Button("打开主窗口") {
-                        onClose()
-                        onOpenLibrary()
-                    }
-                    .buttonStyle(ClipFlowButtonStyle(fill: palette.secondaryButtonFill, size: .compact))
-
                     Button("粘贴选中项") {
                         if let selected = clips.first(where: { $0.id == selectedItemID }) ?? clips.first {
                             selectedItemID = selected.id
@@ -740,7 +785,9 @@ struct QuickPastePanelView: View {
                     .buttonStyle(ClipFlowButtonStyle(fill: palette.primaryButtonFill, foreground: .white, size: .compact))
                 }
             }
-            .blur(radius: inspectingItem == nil ? 0 : ClipFlowMotion.backgroundDefocusRadius)
+            .overlay(
+                Color.black.opacity(inspectingItem == nil ? 0 : 0.35)
+            )
 
             if let inspectingItem {
                 HUDInspectorOverlay(
@@ -772,6 +819,20 @@ struct QuickPastePanelView: View {
         .onChange(of: query) { _, _ in
             selectedItemID = clips.first?.id
         }
+        .onChange(of: activeTab) { _, _ in
+            query = ""
+            selectedItemID = clips.first?.id
+        }
+        .background(
+            QuickPastePanelKeyHandler(
+                clips: clips,
+                selectedItemID: $selectedItemID,
+                onConfirm: { item in
+                    onClose()
+                    onPaste(item)
+                }
+            )
+        )
         .clipShape(RoundedRectangle(cornerRadius: QuickPastePanelLayout.cornerRadius, style: .continuous))
         .background(
             RoundedRectangle(cornerRadius: QuickPastePanelLayout.cornerRadius, style: .continuous)
@@ -781,12 +842,143 @@ struct QuickPastePanelView: View {
             RoundedRectangle(cornerRadius: QuickPastePanelLayout.cornerRadius, style: .continuous)
                 .stroke(isDark ? Color.white.opacity(0.10) : Color.black.opacity(0.08), lineWidth: 1)
         )
-        .shadow(color: Color.black.opacity(isDark ? 0.35 : 0.15), radius: 24, x: 0, y: 18)
     }
 
     private var inspectingItem: ClipboardItem? {
         guard let inspectingItemID else { return nil }
         return store.item(withID: inspectingItemID)
+    }
+
+    @ViewBuilder
+    private func hudRowCard(item: ClipboardItem, isDark: Bool) -> some View {
+        let innerFill: Color = isDark ? Color.white.opacity(0.045) : Color.black.opacity(0.04)
+        let innerStroke: Color = isDark ? Color.white.opacity(0.08) : Color.black.opacity(0.06)
+        let outerFill: Color = isDark ? Color.white.opacity(0.03) : Color.black.opacity(0.03)
+        let innerCard = RoundedRectangle(cornerRadius: ClipFlowRadius.menuRow, style: .continuous)
+        let outerCard = RoundedRectangle(cornerRadius: ClipFlowRadius.menuRow + 2, style: .continuous)
+        let row = HUDRow(item: item, store: store, isSelected: selectedItemID == item.id)
+
+        row.padding(2)
+            .background(innerCard.fill(innerFill))
+            .overlay(innerCard.stroke(innerStroke, lineWidth: 1))
+            .clipShape(innerCard)
+            .padding(2)
+            .background(outerCard.fill(outerFill))
+    }
+
+    @ViewBuilder
+    private func tabButton(title: String, icon: String, tab: PanelTab, palette: ClipFlowPalette) -> some View {
+        let isActive = activeTab == tab
+        Button {
+            withAnimation(ClipFlowMotion.selection) {
+                activeTab = tab
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: icon)
+                    .font(.system(size: 10, weight: .semibold))
+                Text(title)
+                    .font(ClipFlowTypography.smallCaptionBold)
+            }
+            .foregroundStyle(isActive ? .white : Color.secondary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(isActive ? ClipCategory.quickPaste.tint : palette.inputFill)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private func searchBar(palette: ClipFlowPalette) -> some View {
+        HStack(spacing: ClipFlowSpacing.sm) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color.secondary)
+
+            TextField("搜索最近内容", text: $query)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12, weight: .medium))
+        }
+        .padding(.horizontal, ClipFlowSpacing.inputPaddingH)
+        .padding(.vertical, ClipFlowSpacing.inputPaddingV)
+        .background(
+            RoundedRectangle(cornerRadius: ClipFlowRadius.menuButton, style: .continuous)
+                .fill(palette.inputFill)
+        )
+    }
+}
+
+private struct QuickPastePanelKeyHandler: NSViewRepresentable {
+    let clips: [ClipboardItem]
+    @Binding var selectedItemID: UUID?
+    let onConfirm: (ClipboardItem) -> Void
+
+    func makeNSView(context: Context) -> KeyCatcher {
+        let view = KeyCatcher()
+        view.onKeyDown = { event in
+            context.coordinator.handleKey(event)
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: KeyCatcher, context: Context) {
+        context.coordinator.clips = clips
+        context.coordinator.selectedItemID = selectedItemID
+        context.coordinator.onConfirm = onConfirm
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(clips: clips, selectedItemID: $selectedItemID, onConfirm: onConfirm)
+    }
+
+    final class Coordinator {
+        var clips: [ClipboardItem]
+        @Binding var selectedItemID: UUID?
+        var onConfirm: (ClipboardItem) -> Void
+
+        init(clips: [ClipboardItem], selectedItemID: Binding<UUID?>, onConfirm: @escaping (ClipboardItem) -> Void) {
+            self.clips = clips
+            self._selectedItemID = selectedItemID
+            self.onConfirm = onConfirm
+        }
+
+        func handleKey(_ event: NSEvent) {
+            guard !clips.isEmpty else { return }
+            let currentIndex = clips.firstIndex(where: { $0.id == selectedItemID }) ?? 0
+
+            switch event.keyCode {
+            case 126: // Up arrow
+                let newIndex = max(0, currentIndex - 1)
+                selectedItemID = clips[newIndex].id
+            case 125: // Down arrow
+                let newIndex = min(clips.count - 1, currentIndex + 1)
+                selectedItemID = clips[newIndex].id
+            case 36: // Enter
+                if let selected = clips.first(where: { $0.id == selectedItemID }) {
+                    onConfirm(selected)
+                }
+            default:
+                break
+            }
+        }
+    }
+
+    final class KeyCatcher: NSView {
+        var onKeyDown: ((NSEvent) -> Void)?
+
+        override var acceptsFirstResponder: Bool { true }
+
+        override func keyDown(with event: NSEvent) {
+            onKeyDown?(event)
+        }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            window?.makeFirstResponder(self)
+        }
     }
 }
 
@@ -812,7 +1004,8 @@ struct HUDRow: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
-                    Text(item.isImage ? item.title : store.displaySnippet(for: item))
+                    let displayText = item.isImage ? item.title : store.displaySnippet(for: item)
+                    Text(displayText)
                         .font(ClipFlowTypography.bodyBold)
                         .lineLimit(item.isImage ? 1 : 2)
 
@@ -832,7 +1025,9 @@ struct HUDRow: View {
 
                 if item.isImage {
                     ClipThumbnailView(
-                        store: store,
+                        image: store.imagePreview(for: item),
+                        isRevealed: store.isRevealed(item),
+                        privacyColor: item.privacy.color,
                         item: item,
                         height: 88,
                         cornerRadius: ClipFlowRadius.badge,
@@ -943,18 +1138,17 @@ struct HUDInspectorOverlay: View {
     private func hudContent(cardWidth: CGFloat, proxyHeight: CGFloat) -> some View {
         if item.isImage {
             let imageHeight = min(196, max(156, proxyHeight * 0.24))
-            VStack(alignment: .leading, spacing: ClipFlowSpacing.md) {
-                ClipThumbnailView(
-                    store: store,
-                    item: item,
-                    height: imageHeight,
-                    cornerRadius: ClipFlowRadius.innerCard,
-                    showsDimensionLabel: false,
-                    contentMode: .fit,
-                    insetPreview: true
-                )
-                FlexiblePillRow(items: item.labels, tint: item.kind.tint)
-            }
+            ClipThumbnailView(
+                image: store.imagePreview(for: item),
+                isRevealed: store.isRevealed(item),
+                privacyColor: item.privacy.color,
+                item: item,
+                height: imageHeight,
+                cornerRadius: ClipFlowRadius.innerCard,
+                showsDimensionLabel: false,
+                contentMode: .fit,
+                insetPreview: true
+            )
         } else {
             hudTextContent(cardWidth: cardWidth, proxyHeight: proxyHeight)
         }
@@ -962,47 +1156,35 @@ struct HUDInspectorOverlay: View {
 
     @ViewBuilder
     private func hudTextContent(cardWidth: CGFloat, proxyHeight: CGFloat) -> some View {
-        let textContentMaxHeight = min(220, max(110, proxyHeight * 0.34))
         let textValue = store.displayFullText(for: item)
-        let textBoxWidth = max(220, cardWidth - 28)
-        let estimatedHeight = estimatedTextBoxHeight(for: textValue, width: textBoxWidth)
-        let shouldScroll = estimatedHeight > textContentMaxHeight
         let textFont: Font = item.kind == .code ? ClipFlowTypography.captionCode : ClipFlowTypography.body
+        let lineHeight: CGFloat = item.kind == .code ? 16 : 18
+        let lineCount: CGFloat = item.kind == .code ? 7 : 3
+        let fixedHeight = lineHeight * lineCount
 
-        VStack(alignment: .leading, spacing: ClipFlowSpacing.md) {
-            if shouldScroll {
-                ScrollView(.vertical, showsIndicators: false) {
-                    Text(textValue)
-                        .font(textFont)
-                        .foregroundStyle(Color.primary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .textSelection(.enabled)
-                }
-                .frame(height: textContentMaxHeight)
-                .padding(10)
-                .background(
-                    RoundedRectangle(cornerRadius: ClipFlowRadius.innerCard, style: .continuous)
-                        .fill(Color.white.opacity(isDark ? 0.06 : 0.68))
-                )
-            } else {
-                Text(textValue)
-                    .font(textFont)
-                    .foregroundStyle(Color.primary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
-                    .padding(10)
-                    .background(
-                        RoundedRectangle(cornerRadius: ClipFlowRadius.innerCard, style: .continuous)
-                            .fill(Color.white.opacity(isDark ? 0.06 : 0.68))
-                    )
-            }
-            FlexiblePillRow(items: item.labels, tint: item.kind.tint)
+        ScrollView(.vertical, showsIndicators: false) {
+            Text(textValue)
+                .font(textFont)
+                .foregroundStyle(Color.primary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .textSelection(.enabled)
         }
+        .frame(height: fixedHeight)
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: ClipFlowRadius.innerCard, style: .continuous)
+                .fill(Color.white.opacity(isDark ? 0.06 : 0.68))
+        )
     }
 
     @ViewBuilder
     private var hudActions: some View {
         HStack(spacing: 10) {
+            Button(item.pinned ? "取消置顶" : "置顶") {
+                store.togglePin(item.id)
+            }
+            .buttonStyle(ClipFlowButtonStyle(fill: Color.purple.opacity(0.14), foreground: Color.purple))
+
             if item.privacy != .standard {
                 Button(store.isRevealed(item) ? "隐藏内容" : "显示内容") {
                     store.toggleReveal(item.id)

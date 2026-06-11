@@ -4,10 +4,13 @@ import SwiftUI
 // MARK: - App Background
 
 struct AppBackground: View {
-    let palette: ClipFlowPalette
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        palette.backgroundStart.ignoresSafeArea()
+        let color = colorScheme == .light
+            ? Color(red: 0.94, green: 0.94, blue: 0.95)
+            : Color(red: 0.11, green: 0.12, blue: 0.16)
+        color.ignoresSafeArea()
     }
 }
 
@@ -40,7 +43,9 @@ struct FrostedPanel<Content: View>: View {
 // MARK: - Clip Thumbnail View
 
 struct ClipThumbnailView: View {
-    @ObservedObject var store: ClipFlowStore
+    let image: NSImage?
+    let isRevealed: Bool
+    let privacyColor: Color
     let item: ClipboardItem
     let height: CGFloat
     var cornerRadius: CGFloat = 20
@@ -79,13 +84,13 @@ struct ClipThumbnailView: View {
 
     @ViewBuilder
     private var previewContent: some View {
-        if !store.isRevealed(item) {
+        if !isRevealed {
             previewPlaceholder(
                 title: "图片预览已隐藏",
                 icon: "lock.fill",
-                tint: item.privacy.color
+                tint: privacyColor
             )
-        } else if let image = store.imagePreview(for: item) {
+        } else if let image {
             Image(nsImage: image)
                 .resizable()
                 .aspectRatio(contentMode: contentMode)
@@ -127,7 +132,8 @@ struct ClipboardCard: View {
     let isSelected: Bool
     let displayedSnippet: String
     let palette: ClipFlowPalette
-    @ObservedObject var store: ClipFlowStore
+    let imagePreview: NSImage?
+    let isRevealed: Bool
 
     var body: some View {
         let tint = item.kind.tint
@@ -151,6 +157,7 @@ struct ClipboardCard: View {
                         .font(ClipFlowTypography.cardSnippet)
                         .lineLimit(item.isImage ? 1 : 3)
                         .multilineTextAlignment(.leading)
+                        .textSelection(.enabled)
                 }
 
                 Spacer()
@@ -166,7 +173,9 @@ struct ClipboardCard: View {
 
             if item.isImage {
                 ClipThumbnailView(
-                    store: store,
+                    image: imagePreview,
+                    isRevealed: isRevealed,
+                    privacyColor: item.privacy.color,
                     item: item,
                     height: 156,
                     cornerRadius: ClipFlowRadius.innerCard,
@@ -532,7 +541,8 @@ struct PreviewPanel: View {
     let item: ClipboardItem
     let displayedText: String
     let palette: ClipFlowPalette
-    @ObservedObject var store: ClipFlowStore
+    let imagePreview: NSImage?
+    let isRevealed: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: ClipFlowSpacing.md) {
@@ -549,7 +559,9 @@ struct PreviewPanel: View {
             if item.isImage {
                 VStack(alignment: .leading, spacing: ClipFlowSpacing.md) {
                     ClipThumbnailView(
-                        store: store,
+                        image: imagePreview,
+                        isRevealed: isRevealed,
+                        privacyColor: item.privacy.color,
                         item: item,
                         height: 260,
                         cornerRadius: 22,
