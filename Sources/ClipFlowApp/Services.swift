@@ -727,10 +727,10 @@ struct QuickPastePanelView: View {
                 selectedItemID = clips.first?.id
             }
         }
-        .onChange(of: query) { _, _ in
+        .onChangeBackward(of: query) {
             selectedItemID = clips.first?.id
         }
-        .onChange(of: activeTab) { _, _ in
+        .onChangeBackward(of: activeTab) {
             query = ""
             selectedItemID = clips.first?.id
         }
@@ -834,7 +834,7 @@ struct QuickPastePanelView: View {
                 }
             }
         }
-        .scrollIndicators(.hidden)
+        .scrollIndicatorsHiddenCompat()
     }
 
     @ViewBuilder

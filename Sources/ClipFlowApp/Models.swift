@@ -1373,19 +1373,25 @@ final class ClipFlowStore: ObservableObject {
     }
 
     func setLaunchAtLogin(_ enabled: Bool) {
-        do {
-            if enabled {
-                try SMAppService.mainApp.register()
-            } else {
-                try SMAppService.mainApp.unregister()
-            }
+        if #available(macOS 13.0, *) {
+            do {
+                if enabled {
+                    try SMAppService.mainApp.register()
+                } else {
+                    try SMAppService.mainApp.unregister()
+                }
 
+                launchAtLogin = enabled
+                defaults.set(enabled, forKey: Keys.launchAtLogin)
+                lastCaptureStatus = enabled ? "已开启开机自动启动" : "已关闭开机自动启动"
+            } catch {
+                launchAtLogin = Self.currentLaunchAtLoginState()
+                lastCaptureStatus = "开机自动启动设置失败，请将 ClipFlow 放在应用程序目录后再试"
+            }
+        } else {
             launchAtLogin = enabled
             defaults.set(enabled, forKey: Keys.launchAtLogin)
             lastCaptureStatus = enabled ? "已开启开机自动启动" : "已关闭开机自动启动"
-        } catch {
-            launchAtLogin = Self.currentLaunchAtLoginState()
-            lastCaptureStatus = "开机自动启动设置失败，请将 ClipFlow 放在应用程序目录后再试"
         }
     }
 
@@ -1728,7 +1734,7 @@ final class ClipFlowStore: ObservableObject {
         cloudSyncLoopTask?.cancel()
         cloudSyncLoopTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(25))
+                try? await Task.sleep(nanoseconds: 25_000_000_000)
                 self?.refreshICloudSyncIfNeeded()
             }
         }
@@ -1742,7 +1748,7 @@ final class ClipFlowStore: ObservableObject {
     private func scheduleICloudSync() {
         pendingCloudSyncTask?.cancel()
         pendingCloudSyncTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(900))
+            try? await Task.sleep(nanoseconds: 900_000_000)
             self?.refreshICloudSyncIfNeeded()
         }
     }
@@ -1941,12 +1947,15 @@ final class ClipFlowStore: ObservableObject {
     }
 
     private static func currentLaunchAtLoginState() -> Bool {
-        switch SMAppService.mainApp.status {
-        case .enabled, .requiresApproval:
-            return true
-        default:
-            return false
+        if #available(macOS 13.0, *) {
+            switch SMAppService.mainApp.status {
+            case .enabled, .requiresApproval:
+                return true
+            default:
+                return false
+            }
         }
+        return false
     }
 
     private static func decodeTombstones(from data: Data?) -> [UUID: Date] {

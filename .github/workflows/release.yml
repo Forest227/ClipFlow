@@ -34,7 +34,7 @@ jobs:
             echo "HAS_CUSTOM_NOTES=false" >> "$GITHUB_ENV"
           fi
 
-      - name: Build app and DMG
+      - name: Build app and DMGs (arm64 / x86_64 / universal)
         shell: /bin/zsh {0}
         run: zsh scripts/build_release_dmg.sh "${TAG_NAME}"
 
@@ -53,8 +53,14 @@ jobs:
         run: |
           set -euo pipefail
 
-          DMG_PATH="dist/release/ClipFlow-${TAG_NAME}.dmg"
-          SHA_PATH="${DMG_PATH}.sha256"
+          ARTIFACTS=(
+            "dist/release/ClipFlow-${TAG_NAME}-arm64.dmg"
+            "dist/release/ClipFlow-${TAG_NAME}-arm64.dmg.sha256"
+            "dist/release/ClipFlow-${TAG_NAME}-x86_64.dmg"
+            "dist/release/ClipFlow-${TAG_NAME}-x86_64.dmg.sha256"
+            "dist/release/ClipFlow-${TAG_NAME}-universal.dmg"
+            "dist/release/ClipFlow-${TAG_NAME}-universal.dmg.sha256"
+          )
 
           if gh release view "${TAG_NAME}" >/dev/null 2>&1; then
             if [[ "${HAS_CUSTOM_NOTES}" == "true" ]]; then
@@ -63,17 +69,20 @@ jobs:
                 --notes-file "${RELEASE_NOTES_FILE}"
             fi
 
-            gh release upload "${TAG_NAME}" "${DMG_PATH}" "${SHA_PATH}" --clobber
+            gh release upload "${TAG_NAME}" "${ARTIFACTS[@]}" --clobber
           else
+            COMMON_ARGS=(
+              --verify-tag
+              --title "${RELEASE_TITLE}"
+            )
+
             if [[ "${HAS_CUSTOM_NOTES}" == "true" ]]; then
-              gh release create "${TAG_NAME}" "${DMG_PATH}" "${SHA_PATH}" \
-                --verify-tag \
-                --title "${RELEASE_TITLE}" \
+              gh release create "${TAG_NAME}" "${ARTIFACTS[@]}" \
+                "${COMMON_ARGS[@]}" \
                 --notes-file "${RELEASE_NOTES_FILE}"
             else
-              gh release create "${TAG_NAME}" "${DMG_PATH}" "${SHA_PATH}" \
-                --verify-tag \
-                --title "${RELEASE_TITLE}" \
+              gh release create "${TAG_NAME}" "${ARTIFACTS[@]}" \
+                "${COMMON_ARGS[@]}" \
                 --generate-notes
             fi
           fi

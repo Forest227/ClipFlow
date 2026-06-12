@@ -48,11 +48,11 @@ struct SettingsView: View {
                                 }
                             }
 
-                            ViewThatFits(in: .horizontal) {
+                            HorizontalViewThatFits {
                                 HStack(spacing: ClipFlowSpacing.sm) {
                                     settingsStatusPills
                                 }
-
+                            } second: {
                                 LazyVGrid(columns: [GridItem(.flexible(), spacing: ClipFlowSpacing.sm), GridItem(.flexible(), spacing: ClipFlowSpacing.sm)], spacing: ClipFlowSpacing.sm) {
                                     settingsStatusPills
                                 }
@@ -217,7 +217,7 @@ struct SettingsView: View {
 
                             TextEditor(text: $excludedAppsText)
                                 .font(.system(size: 13, weight: .medium, design: .monospaced))
-                                .scrollContentBackground(.hidden)
+                                .scrollContentBackgroundHiddenCompat()
                                 .padding(10)
                                 .background(excludedAppsEditorFill)
                                 .clipShape(RoundedRectangle(cornerRadius: ClipFlowRadius.innerCard, style: .continuous))
@@ -240,7 +240,7 @@ struct SettingsView: View {
                 }
                 .padding(16)
             }
-            .scrollIndicators(.hidden)
+            .scrollIndicatorsHiddenCompat()
         }
         .frame(minWidth: 380, idealWidth: 380, minHeight: 600, idealHeight: 600)
         .onAppear {

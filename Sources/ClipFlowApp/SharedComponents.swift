@@ -459,10 +459,11 @@ struct FlexiblePillRow: View {
     let tint: Color
 
     var body: some View {
-        ViewThatFits(in: .horizontal) {
+        HorizontalViewThatFits {
             HStack(spacing: ClipFlowSpacing.sm) {
                 rowContent
             }
+        } second: {
             VStack(alignment: .leading, spacing: ClipFlowSpacing.sm) {
                 rowContent
             }

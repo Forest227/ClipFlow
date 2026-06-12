@@ -51,11 +51,11 @@ struct LibraryInspectorOverlay: View {
                         isRevealed: store.isRevealed(item)
                     )
 
-                    ViewThatFits(in: .horizontal) {
+                    HorizontalViewThatFits {
                         HStack(spacing: 10) {
                             actionButtons
                         }
-
+                    } second: {
                         VStack(alignment: .leading, spacing: 10) {
                             actionButtons
                         }
