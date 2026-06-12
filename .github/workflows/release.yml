@@ -65,14 +65,18 @@ jobs:
           if gh release view "${TAG_NAME}" >/dev/null 2>&1; then
             if [[ "${HAS_CUSTOM_NOTES}" == "true" ]]; then
               gh release edit "${TAG_NAME}" \
+                --draft=false \
                 --title "${RELEASE_TITLE}" \
                 --notes-file "${RELEASE_NOTES_FILE}"
+            else
+              gh release edit "${TAG_NAME}" --draft=false
             fi
 
             gh release upload "${TAG_NAME}" "${ARTIFACTS[@]}" --clobber
           else
             COMMON_ARGS=(
               --verify-tag
+              --draft=false
               --title "${RELEASE_TITLE}"
             )
 
